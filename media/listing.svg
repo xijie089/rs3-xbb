@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="background" x2="0" y2="1">
+      <stop stop-color="#101c25"/>
+      <stop offset="1" stop-color="#09131a"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#28695f" stop-opacity=".28"/>
+      <stop offset="1" stop-color="#28695f" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="capture">
+      <rect x="766" y="154" width="418" height="420.42" rx="6"/>
+    </clipPath>
+    <filter id="shadow" x="-25%" y="-15%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <rect width="1280" height="720" fill="url(#background)"/>
+  <ellipse cx="1060" cy="240" rx="510" ry="480" fill="url(#glow)"/>
+  <rect x="76" y="100" width="88" height="7" rx="3.5" fill="#59cbb2"/>
+  <g font-family="sans-serif" fill="#f0f4f6">
+    <text x="64" y="333" font-size="216" font-weight="700" letter-spacing="-10">XBB</text>
+    <text x="76" y="404" font-size="42">Xijie Buff Bars</text>
+    <text x="76" y="480" font-size="27">Your buffs. At a glance.</text>
+    <text x="750" y="104" font-size="15" letter-spacing="2" fill="#afc1cd">YOUR BUFFS &amp; DEBUFFS</text>
+    <text x="975" y="639" font-size="18" text-anchor="middle" fill="#afc1cd">Combined or separate stacks.</text>
+  </g>
+  <rect x="750" y="132" width="450" height="464" rx="14"
+    fill="#12232b" stroke="#34544f" filter="url(#shadow)"/>
+  <image href="native-bars.png" x="766" y="154" width="418" height="420.42"
+    preserveAspectRatio="xMidYMid meet" clip-path="url(#capture)"/>
+</svg>
