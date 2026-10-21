@@ -2,6 +2,7 @@
 XBB / Native client test doubles
 Provides in-memory UI trees, input, event hooks, and settings storage.
 Checks integer layout coordinates and native Text configuration constraints.
+Mouse hooks are invoked explicitly by the integration tests.
 install() supplies the client globals used by the native integration tests.
 ]]
 
@@ -47,7 +48,8 @@ function Node:Destroy()
 end
 function M.node(parent, kind)
     local node = setmetatable({ children = {}, hooks = {}, hidden = false, visible = true, alpha = 255, type = kind,
-        text = {}, parent = parent, scrollX = 0, scrollY = 0, width = 1000, height = 800, x = 0, y = 0 }, Node)
+        text = {}, parent = parent, scrollX = 0, scrollY = 0,
+        width = 1000, height = 800, x = 0, y = 0 }, Node)
     if parent then parent.children[#parent.children + 1] = node end
     return node
 end
@@ -71,7 +73,7 @@ function M.install()
         TriggerMode = { ONPRESS = 1 },
         AlignMode = { TOPLEFT = 0, CENTRE = 1, BOTTOMRIGHT = 2 },
         Hook = { ONBUTTONPRESSED = 1, ONSCROLLWHEEL = 2, ONCLICK = 3, ONRELEASE = 4,
-            ONDRAG = 5, ONDRAGCOMPLETE = 6 } }
+            ONDRAG = 5, ONDRAGCOMPLETE = 6, ONHOLD = 7 } }
     for _, kind in ipairs({ "Layer", "Text", "Rectangle", "Button" }) do
         ui[kind] = { new = function(parent) return M.node(parent, kind == "Text" and 2 or 1) end }
     end
@@ -100,9 +102,9 @@ function M.install()
             Unsubscribe = function(key) events[name][key] = nil end,
         }
     end
-    local db = { values = {} }
+    local db = { values = {}, writes = 0 }
     function db:Get(key) return self.values[key] end
-    function db:Set(key, value) self.values[key] = value; return true end
+    function db:Set(key, value) self.writes = self.writes + 1; self.values[key] = value; return true end
     _G.PersistentDB = db
     _G.Player = { IsAvailable = function() return available end }
     _G.Keyboard = {

@@ -12,14 +12,6 @@ local Model = require("xbb/model")
 local Hud = {}
 Hud.__index = Hud
 
-local function pointerPosition(parent)
-    local pointer = Mouse.GetPosition()
-    if not pointer then return nil end
-    local scale = game.options.InterfaceScale.setting / 100
-    local origin = parent.xyGlobal
-    return { x = pointer.x / scale - origin.x, y = pointer.y / scale - origin.y }
-end
-
 local function position(config, kind)
     if kind == "debuff" then return config.debuffX, config.debuffY end
     return config.x, config.y
@@ -61,7 +53,7 @@ function Hud:beginDrag(stack)
     local config = self.settings.data
     if self.drag or config.dragLocked or stack.root.hidden or not Keyboard.IsAvailable()
         or not Mouse.IsAvailable() or Keyboard.IsBlocked() or not Keyboard.IsControlDown() then return end
-    local pointer = pointerPosition(self.parent)
+    local pointer = UI.pointerPosition(self.parent)
     if not pointer then return end
     self:hideTooltip()
     self.drag = { stack = stack, separate = config.separate, x = stack.root.x, y = stack.root.y,
@@ -153,7 +145,7 @@ function Hud:updateDrag()
         self:finishDrag()
         return
     end
-    local pointer = pointerPosition(self.parent)
+    local pointer = UI.pointerPosition(self.parent)
     if not pointer then self:finishDrag(); return end
     self.drag.x = math.max(0, math.min(10000, self.parent.width - config.width,
         math.floor(pointer.x - self.drag.offsetX)))

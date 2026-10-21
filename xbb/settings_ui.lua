@@ -4,6 +4,7 @@ Builds the Display, Hidden, Pins, Missing, and Observed settings tabs.
 Uses remembered effect metadata to configure effects even while absent.
 Sends edits through Settings and Actions; refreshes when settings data changes.
 Preserves the selected tab and clamps pagination as entries change.
+Uses title-bar press/release events and persists the completed window position.
 ]]
 
 local UI = require("xbb/ui")
@@ -28,20 +29,88 @@ function View.new(parent, settings)
     return self
 end
 
+function View:clampPosition(x, y)
+    return math.max(0, math.min(10000, self.parent.width - self.root.width, math.floor(x))),
+        math.max(0, math.min(10000, self.parent.height - self.root.height, math.floor(y)))
+end
+
+function View:beginDrag()
+    if self.drag or not Mouse.IsAvailable() then return end
+    local pointer = UI.pointerPosition(self.parent)
+    if not pointer then return end
+    self.drag = { x = self.x, y = self.y, startX = self.x, startY = self.y,
+        offsetX = pointer.x - self.x, offsetY = pointer.y - self.y, active = false }
+end
+
+function View:updateDrag()
+    if not self.drag then return end
+    if not Mouse.IsAvailable() then self:finishDrag(); return end
+    local pointer = UI.pointerPosition(self.parent)
+    if not pointer then self:finishDrag(); return end
+    local x, y = self:clampPosition(pointer.x - self.drag.offsetX, pointer.y - self.drag.offsetY)
+    if not self.drag.active and math.abs(x - self.drag.startX) < 3 and math.abs(y - self.drag.startY) < 3 then return end
+    self.drag.active = true
+    self.drag.x, self.drag.y = x, y
+    self.root:SetPos(self.drag.x, self.drag.y)
+end
+
+function View:finishDrag(closing)
+    local drag = self.drag
+    if not drag then return end
+    self.drag = nil
+    if drag.active then
+        self.x, self.y = self:clampPosition(drag.x, drag.y)
+        if (self.x ~= drag.startX or self.y ~= drag.startY)
+            and not self.settings:setWindowPosition(self.x, self.y) then
+            local saved = self.settings.data.settingsWindowPosition
+            self.x, self.y = self:clampPosition(saved and saved.x or drag.startX, saved and saved.y or drag.startY)
+        end
+    end
+    if not closing and (drag.active or self.pendingRender or self.renderedData ~= self.settings.data) then
+        self:render()
+    end
+end
+
 function View:refresh()
-    if self.root and self.renderedData ~= self.settings.data then self:render() end
+    if not self.root then return end
+    self:updateDrag()
+    if self.parent.width ~= self.parentWidth or self.parent.height ~= self.parentHeight then
+        self:finishDrag(true)
+        self:render()
+    elseif self.renderedData ~= self.settings.data then self:render() end
 end
 
 function View:render()
+    if self.drag then self.pendingRender = true; return end
+    self.pendingRender = nil
     if self.root then self.root:Destroy() end
-    local width = math.min(760, self.parent.width - 20)
-    local height = math.min(560, self.parent.height - 20)
+    local width = math.max(0, math.min(760, self.parent.width - 20))
+    local height = math.max(0, math.min(560, self.parent.height - 20))
+    self.parentWidth, self.parentHeight = self.parent.width, self.parent.height
+    local saved = self.settings.data.settingsWindowPosition
+    self.x = self.x or (saved and saved.x) or math.max(0, (self.parent.width - width) // 2)
+    self.y = self.y or (saved and saved.y) or math.max(0, (self.parent.height - height) // 2)
     -- Native absolute layout coordinates and sizes are integers.
-    self.root = UI.layer(self.parent, math.max(0, (self.parent.width - width) // 2),
-        math.max(0, (self.parent.height - height) // 2), width, height)
+    self.root = UI.layer(self.parent, 0, 0, width, height)
+    self.x, self.y = self:clampPosition(self.x, self.y)
+    self.root:SetPos(self.x, self.y)
     self.root.clickthrough = false
     UI.rectangle(self.root, 0, 0, width, height, 0x101C25FF)
-    UI.text(self.root, 16, 8, width - 110, 30, "XBB / Xijie Buff Bars / " .. self.tab)
+    local title = UI.text(self.root, 16, 8, width - 110, 30, "XBB / Xijie Buff Bars / " .. self.tab)
+    self.title = title
+    title.clickthrough, title.enabled = false, true
+    title:Subscribe(ui.Hook.ONCLICK, function()
+        if self.title == title then self:beginDrag() end
+    end)
+    title:Subscribe(ui.Hook.ONHOLD, function()
+        if self.title == title then self:updateDrag() end
+    end)
+    title:Subscribe(ui.Hook.ONRELEASE, function()
+        if self.title == title then
+            self:updateDrag()
+            self:finishDrag()
+        end
+    end)
     UI.button(self.root, width - 80, 10, 64, "Close", function() self:destroy() end)
     local tabs = { "Display", "Hidden", "Pins", "Missing", "Observed" }
     for i, tab in ipairs(tabs) do
@@ -74,7 +143,8 @@ function View:render()
                 self.settings:set(field[1], config[field[1]] + field[3])
             end))
         end
-        UI.text(self.root, 16, 354, width - 32, 28, "Ctrl-click a header or bar; release Ctrl to save.")
+        UI.text(self.root, 16, 354, width - 32, 28, "Ctrl-click a buff header or bar; release Ctrl to save.")
+        UI.text(self.root, 16, 382, width - 32, 28, "Drag this window by its title bar; release to save.")
         UI.text(self.root, 16, 424, width - 32, 28, "Open Settings > Gameplay > Interfaces > Buff Bar.")
         UI.text(self.root, 16, 452, width - 32, 28, "Turn on the items you want XBB to track.")
         return
@@ -151,6 +221,8 @@ function View:render()
 end
 
 function View:destroy()
+    self:finishDrag(true)
     if self.root then self.root:Destroy(); self.root = nil end
+    self.title = nil
 end
 return View

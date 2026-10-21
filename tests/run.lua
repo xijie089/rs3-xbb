@@ -86,6 +86,51 @@ test("position writes and reset failures leave both stacks unchanged", function(
     equal(#warnings, 4)
 end)
 
+test("settings window position is optional persistent and independent of bar positions", function()
+    local config, db = settings()
+    equal(config.data.settingsWindowPosition, nil)
+    equal(db.values.settings, nil)
+    equal(config:setWindowPosition(180, 210), true)
+    local position = config.data.settingsWindowPosition
+    equal(position.x, 180)
+    equal(position.y, 210)
+    equal(config.data.x, 32)
+    equal(config.data.y, 80)
+    equal(Settings.new(db, error).data.settingsWindowPosition.y, 210)
+    config:resetPositions()
+    equal(config.data.settingsWindowPosition.x, 180)
+    db.Set = function() error("unchanged window position must not write") end
+    local data = config.data
+    equal(config:setWindowPosition(180, 210), true)
+    equal(config.data, data)
+end)
+
+test("invalid and rejected settings window positions report without changing settings", function()
+    for _, value in ipairs({ false, "180,210", {}, { x = 10 }, { x = -1, y = 10 },
+        { x = 1.5, y = 10 }, { x = 10001, y = 10 }, { x = 10, y = math.huge } }) do
+        local warnings = {}
+        local db = { Get = function() return { settingsWindowPosition = value, width = 400 } end }
+        local config = Settings.new(db, function(message) warnings[#warnings + 1] = message end)
+        equal(config.data.settingsWindowPosition, nil)
+        equal(config.data.width, 400)
+        equal(#warnings, 1)
+        assert(warnings[1]:find("settingsWindowPosition", 1, true))
+    end
+    local config, db = settings()
+    config:setWindowPosition(180, 210)
+    local data, stored, warnings = config.data, db.values.settings, {}
+    config.report = function(message) warnings[#warnings + 1] = message end
+    equal(config:setWindowPosition(nil, 10), false)
+    equal(config:setWindowPosition(10, -1), false)
+    equal(config:setWindowPosition(1.5, 10), false)
+    db.Set = function() return false end
+    equal(config:setWindowPosition(200, 220), false)
+    equal(config.data, data)
+    equal(db.values.settings, stored)
+    equal(config.data.settingsWindowPosition.x, 180)
+    equal(#warnings, 4)
+end)
+
 test("percentage count metadata survives the model and pinned rows", function()
     local config = settings()
     local model = Model.new()

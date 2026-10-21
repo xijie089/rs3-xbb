@@ -1,11 +1,19 @@
 --[[
 XBB / Native component helpers
 Constructs layers, rectangles, text, and buttons beneath a supplied parent.
-Applies shared fonts, alignment, and input defaults.
+Applies shared fonts, alignment, input defaults, and pointer coordinate conversion.
 Callers supply button callbacks and manage component destruction.
 ]]
 
 local M = {}
+
+function M.pointerPosition(parent)
+    local pointer = Mouse.GetPosition()
+    if not pointer then return nil end
+    local scale = game.options.InterfaceScale.setting / 100
+    local origin = parent.xyGlobal
+    return { x = pointer.x / scale - origin.x, y = pointer.y / scale - origin.y }
+end
 
 function M.layer(parent, x, y, width, height)
     local result = ui.Layer.new(parent)

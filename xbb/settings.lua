@@ -28,6 +28,10 @@ local function integer(value, minimum, maximum)
         and value >= minimum and value <= maximum
 end
 
+local function windowPosition(value)
+    return type(value) == "table" and integer(value.x, 0, 10000) and integer(value.y, 0, 10000)
+end
+
 local function identity(value)
     return type(value) == "table" and type(value.key) == "string" and value.key ~= ""
         and type(value.name) == "string" and (value.kind == "buff" or value.kind == "debuff")
@@ -78,7 +82,8 @@ function Settings.new(db, report)
     end
     for key, value in pairs(stored or {}) do
         local valid
-        if ranges[key] then valid = integer(value, ranges[key][1], ranges[key][2])
+        if key == "settingsWindowPosition" then valid = windowPosition(value)
+        elseif ranges[key] then valid = integer(value, ranges[key][1], ranges[key][2])
         elseif key == "separate" or key == "replaceNative" or key == "dragLocked" then valid = type(value) == "boolean"
         elseif key == "hidden" or key == "pins" or key == "rules" or key == "known" then
             valid = type(value) == "table"
@@ -107,7 +112,9 @@ function Settings.new(db, report)
             end
         end
         if valid then self.data[key] = copy(value)
-        elseif defaults[key] ~= nil then report("XBB: invalid saved " .. key .. "; using default") end
+        elseif defaults[key] ~= nil or key == "settingsWindowPosition" then
+            report("XBB: invalid saved " .. key .. "; using default")
+        end
     end
     -- Older layouts placed debuffs beside the buff stack.
     if stored and stored.debuffX == nil then self.data.debuffX = math.min(10000, self.data.x + self.data.width + 24) end
@@ -142,6 +149,19 @@ function Settings:setPosition(x, y, kind)
     local data = copy(self.data)
     if kind == "debuff" then data.debuffX, data.debuffY = x, y
     else data.x, data.y = x, y end
+    return self:save(data)
+end
+
+function Settings:setWindowPosition(x, y)
+    local position = { x = x, y = y }
+    if not windowPosition(position) then
+        self.report("XBB: invalid settings window position")
+        return false
+    end
+    local previous = self.data.settingsWindowPosition
+    if previous and previous.x == x and previous.y == y then return true end
+    local data = copy(self.data)
+    data.settingsWindowPosition = position
     return self:save(data)
 end
 

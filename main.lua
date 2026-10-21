@@ -120,7 +120,10 @@ Event.SettingsLayerReady.Subscribe("xbb", function(event)
     settingsView = SettingsUI.new(event.component, settings)
 end)
 Event.WindowFocusChanged.Subscribe("xbb", function(event)
-    if not event.hasFocus and hud then hud:finishDrag() end
+    if not event.hasFocus then
+        if hud then hud:finishDrag() end
+        if settingsView then settingsView:finishDrag() end
+    end
 end)
 
 function PluginLogic(event)

@@ -39,8 +39,10 @@ Open settings from the XBB header or the Plugin Hub settings icon.
    stacks, and **Replace original bars**.
 3. Right-click a bar to hide or pin it. A pinned bar also offers **Reserve slot
    when absent**. For buffs, **Warn when missing** adds an optional reminder.
-4. Hold **Ctrl** and left-click a header or bar to move its stack. Release
+4. Hold **Ctrl** and left-click a buff/debuff header or bar to move its stack. Release
    **Ctrl** to save the position.
+5. Hold the **left mouse button** on the settings window's title bar to move it.
+   Release to save its position across reopening, plugin reloads, and game restarts.
 
 XBB requests no permissions and has no external plugin dependencies. Settings
 and observed effect metadata (identities, original and short names, and hover
@@ -100,9 +102,16 @@ the mouse button does not need to stay down. Release **Ctrl** to save.
 Dragging preserves the grab offset, accounts for interface scaling, and keeps
 the stack within the game area. Buffs and debuffs remember independent positions
 when separated; the combined stack uses the buff position.
-**Settings > Display > Lock dragging** disables Ctrl-click movement.
+**Settings > Display > Lock dragging** disables Ctrl-click bar movement only.
 **Reset positions** restores both stacks without changing other settings,
-including the drag lock.
+including the drag lock and settings-window position.
+
+The settings window moves separately: hold the **left mouse button** on its
+title bar and drag, then release to save. No Ctrl modifier is needed, and the
+window stays movable when bar dragging is locked. It remembers its position
+through tab changes, closing and reopening, plugin reloads, and game restarts.
+The first opening is centred; saved positions are constrained to the available
+interface area if its dimensions change.
 
 ## Hiding and pins
 
@@ -262,8 +271,10 @@ RuneScape API integration.
 ## Mod.io submission
 
 Version **0.1.0** has been submitted to Mod.io and is awaiting moderation.
-[`MODIO.md`](MODIO.md) records the listing fields, submitted description, and
-required disclosures. [`media/listing.png`](media/listing.png) is the 1280x720
+Version **0.1.1** adds movable settings with saved positions and is prepared for
+the next upload.
+[`MODIO.md`](MODIO.md) records the listing fields, next-upload description,
+changelog, and required disclosures. [`media/listing.png`](media/listing.png) is the 1280x720
 listing artwork; its editable source is [`media/listing.svg`](media/listing.svg), which uses the
 native-client crop [`media/native-bars.png`](media/native-bars.png). The banner
 combines branding with an actual XBB capture. Additional native captures can be
