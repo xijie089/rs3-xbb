@@ -22,26 +22,31 @@ local function detailText(value)
     return clean(type(value) == "string" and value:gsub("<[bB][rR]%s*/?>", "\n") or "")
 end
 
+local function secondsPrecision(value)
+    return 10 ^ -#(value:match("%.(%d*)$") or "")
+end
+
 function Reader.parseTime(value, allowBare)
     value = clean(value):lower()
     local hours, minutes, seconds = value:match("^(%d+):(%d%d):(%d%d)$")
     if hours and tonumber(minutes) < 60 and tonumber(seconds) < 60 then
-        return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds)
+        return tonumber(hours) * 3600 + tonumber(minutes) * 60 + tonumber(seconds), 1
     end
     minutes, seconds = value:match("^(%d+):(%d%d)$")
-    if minutes and tonumber(seconds) < 60 then return tonumber(minutes) * 60 + tonumber(seconds) end
+    if minutes and tonumber(seconds) < 60 then return tonumber(minutes) * 60 + tonumber(seconds), 1 end
     local number = value:match("^(%d+%.?%d*)s$")
-    if number then return tonumber(number) end
-    local total, rest = 0, value
+    if number then return tonumber(number), secondsPrecision(number) end
+    local total, rest, precision = 0, value, 1
     for _, unit in ipairs({ { "h", 3600 }, { "m", 60 }, { "s", 1 } }) do
         local amount = rest:match("^(%d+)%s*" .. unit[1])
         if amount then
             total = total + tonumber(amount) * unit[2]
+            precision = unit[2]
             rest = rest:gsub("^%d+%s*" .. unit[1] .. "%s*", "", 1)
         end
     end
-    if rest == "" and value ~= "" then return total end
-    if allowBare and value:match("^%d+%.?%d*$") then return tonumber(value) end
+    if rest == "" and value ~= "" then return total, precision end
+    if allowBare and value:match("^%d+%.?%d*$") then return tonumber(value), secondsPrecision(value) end
 end
 
 function Reader.new(api)
@@ -163,6 +168,7 @@ function Reader:readSlot(node, kind)
     local usesStacks = metadata("COMBATV2_BUFF_USES_STACKS")
     local percent = metadata("COMBATV2_BUFF_USES_STACKS_PERCENT")
     local usesEnd = metadata("COMBATV2_BUFF_USES_ABILITY_END")
+    usesEnd = usesEnd == 1 or usesEnd == true
     local stacks = usesStacks == 1 or usesStacks == true or percent == 1 or percent == true
     local key = kind .. ":" .. (structID and tostring(structID) or "name:" .. name:lower())
     local displayName = Catalog.displayName(name, struct and struct.configName, abilityName, key)
@@ -197,24 +203,33 @@ function Reader:readSlot(node, kind)
     end
     -- Timer and count labels can appear in either order.
     for _, label in ipairs(labels) do
-        local duration = Reader.parseTime(label, not stacks and (usesStacks == 0 or usesStacks == false))
-        if duration and effect.remaining == nil then
-            effect.timing, effect.remaining = "timed", duration
+        local timerLabel, countLabel, combined = label, label, false
+        if stacks then
+            local timer, count = label:match("^(.-)%s*%((%d+%%?)%)$")
+            if timer then timerLabel, countLabel, combined = timer, count, true end
+        end
+        local allowBare = (not stacks and (usesStacks == 0 or usesStacks == false)) or (combined and usesEnd)
+        local duration, precision = Reader.parseTime(timerLabel, allowBare)
+        if duration and (effect.remaining == nil or (effect.timerPrecision and precision < effect.timerPrecision)) then
+            effect.timing, effect.remaining, effect.timerPrecision = "timed", duration, precision
+            effect.timerText = timerLabel
         end
         if stacks then
-            local count = tonumber(label:match("^(%d+)%%?$"))
+            local count = tonumber(countLabel:match("^(%d+)%%?$"))
             if count ~= nil then
                 effect.stacks = count
-                if label:sub(-1) == "%" then effect.stacksPercent = true end
+                if countLabel:sub(-1) == "%" then effect.stacksPercent = true end
             end
         end
     end
-    -- Stack effects or label-free effects without an end flag are untimed.
-    if effect.timing == "unknown" and (stacks or (#labels == 0 and usesEnd ~= 1 and usesEnd ~= true)) then
+    -- An end flag keeps unreadable timers pending.
+    if effect.timing == "unknown" and not usesEnd and (stacks or #labels == 0) then
         effect.timing = "untimed"
     end
     if book and type(book.remaining) == "number" and book.remaining >= 0 and book.remaining < math.huge then
         effect.timing, effect.remaining = "timed", book.remaining
+        effect.timerPrecision = nil
+        effect.timerText = nil
     end
     return effect, nameUnavailable and "effect name unavailable" or nil, details
 end

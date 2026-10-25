@@ -16,6 +16,10 @@ M.nativeNames = {
 
 M.nativeDetails = {
     COMBATV2_BUFF_RANGED_SEARING_WINDS = "Ranged attacks deal an additional 20% bonus damage with each hit.",
+    COMBATV2_BUFF_BLOOD_TITHE = "Each stack boosts basic Magic ability base damage by 1% (maximum 12 stacks).",
+    COMBATV2_BUFF_GLACIAL_EMBRACE = "Each stack cuts Tsunami's adrenaline cost by 12% (maximum 5 stacks).\n"
+        .. "At 5 stacks, Incite Fear attacks can trigger Frost Surge for 10-50% ability damage "
+        .. "to the target and up to 8 enemies within 2 tiles (12s cooldown).",
 }
 
 local shortNames = require("xbb/short_names")

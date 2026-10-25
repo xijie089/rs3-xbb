@@ -14,7 +14,7 @@ local Hud = require("xbb/hud")
 local SettingsUI = require("xbb/settings_ui")
 
 local settings = Settings.new(PersistentDB, warn)
-local model = Model.new()
+local model = Model.new(settings.data.known)
 local now, lastRender, issue, logged = 0, -5, nil, nil
 local function objectName(value)
     if type(value) == "number" then
@@ -61,7 +61,7 @@ local reader = Reader.new({
         end }
     end,
 })
-local hud, parent, settingsView
+local hud, parent, settingsView, contentView, launcherView
 local visibilityIssue
 
 local function replace(enabled)
@@ -74,9 +74,17 @@ local function replace(enabled)
 end
 
 local function openSettings()
-    if not parent then return end
-    if settingsView then settingsView:destroy() end
-    settingsView = SettingsUI.new(parent, settings)
+    local gameArea = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
+    if not Player.IsAvailable() or not gameArea then
+        warn("XBB: log in before opening the full settings window")
+        return
+    end
+    if settingsView and settingsView.parent ~= gameArea then
+        settingsView:destroy()
+        settingsView = nil
+    end
+    if settingsView then settingsView:show()
+    else settingsView = SettingsUI.new(gameArea, settings) end
 end
 
 local function scan()
@@ -85,7 +93,7 @@ local function scan()
     if not ok then problem, snapshot = "Native buff API error: " .. tostring(snapshot), nil end
     if snapshot then
         model:update(snapshot, now)
-        settings:remember(snapshot)
+        settings:remember(snapshot, model.durations)
         replace(settings.data.replaceNative)
     else
         -- Unavailable source data suppresses missing warnings and restores native bars.
@@ -101,10 +109,10 @@ local function scan()
     logged = problem
 end
 
-local function clear()
+local function clear(nextParent)
     replace(false)
     if hud then hud:destroy(); hud = nil end
-    if settingsView then settingsView:destroy(); settingsView = nil end
+    if settingsView and settingsView.parent ~= nextParent then settingsView:destroy(); settingsView = nil end
     model:unavailable()
     parent = nil
 end
@@ -116,8 +124,12 @@ Event.Draw.Subscribe("xbb", function()
 end)
 Event.MiniMenuReady.Subscribe("xbb", function(event) if hud then hud:menu(event) end end)
 Event.SettingsLayerReady.Subscribe("xbb", function(event)
-    if settingsView then settingsView:destroy() end
-    settingsView = SettingsUI.new(event.component, settings)
+    if launcherView then launcherView:destroy() end
+    launcherView = SettingsUI.launcher(event.component, settings, openSettings)
+end)
+Event.ContentLayerReady.Subscribe("xbb", function(event)
+    if contentView then contentView:destroy() end
+    contentView = SettingsUI.launcher(event.component, settings, openSettings)
 end)
 Event.WindowFocusChanged.Subscribe("xbb", function(event)
     if not event.hasFocus then
@@ -128,8 +140,10 @@ end)
 
 function PluginLogic(event)
     now = event.logicTick / 50
+    if contentView then contentView:refresh() end
+    if launcherView then launcherView:refresh() end
     if not Player.IsAvailable() then
-        if hud or model.available then clear() end
+        if hud or model.available or settingsView then clear() end
         return
     end
     local gameArea = ui.Interfaces:GetComponent(id.Component.TOPLEVEL_V2__GAME_AREA)
@@ -139,9 +153,9 @@ function PluginLogic(event)
         return
     end
     if parent ~= gameArea then
-        clear()
+        clear(gameArea)
         parent = gameArea
-        hud = Hud.new(parent, settings, openSettings)
+        hud = Hud.new(parent, settings)
         scan()
         lastRender = event.logicTick - 5
     end
@@ -159,8 +173,11 @@ function PluginShutdown()
     Event.Draw.Unsubscribe("xbb")
     Event.MiniMenuReady.Unsubscribe("xbb")
     Event.SettingsLayerReady.Unsubscribe("xbb")
+    Event.ContentLayerReady.Unsubscribe("xbb")
     Event.WindowFocusChanged.Unsubscribe("xbb")
+    if contentView then contentView:destroy(); contentView = nil end
+    if launcherView then launcherView:destroy(); launcherView = nil end
     clear()
 end
 
-log("XBB loaded. Right-click bars or open XBB settings to configure.")
+log("XBB loaded. Open Xijie Buff Bars in Plugins for settings; right-click bars to configure effects.")

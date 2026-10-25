@@ -1,7 +1,7 @@
 --[[
 XBB / Persistent settings
 Validates and migrates local configuration and remembered effect metadata.
-Stores layout, hidden effects, pins, missing rules, and known effects via the
+Stores layout, colors, hidden effects, pins, missing rules, and known effects via the
 injected PersistentDB adapter. Changes use copies of the current settings.
 Replaces the current data table only after a successful persistent write.
 Reports invalid values and rejected writes through the supplied callback.
@@ -12,7 +12,8 @@ Settings.__index = Settings
 local Catalog = require("xbb/catalog")
 
 local defaults = { separate = false, replaceNative = true, dragLocked = false, width = 340, height = 28,
-    gap = 4, x = 32, y = 80, debuffX = 396, debuffY = 80, hidden = {}, pins = {}, rules = {}, known = {} }
+    gap = 4, x = 32, y = 80, debuffX = 396, debuffY = 80, hidden = {}, pins = {}, rules = {}, known = {},
+    colorDefaults = { buff = "357E89DD", debuff = "965565DD", missing = "B0485BEE" }, colors = {} }
 local ranges = { width = { 240, 640 }, height = { 24, 48 }, gap = { 0, 16 },
     x = { 0, 10000 }, y = { 0, 10000 }, debuffX = { 0, 10000 }, debuffY = { 0, 10000 } }
 
@@ -28,6 +29,11 @@ local function integer(value, minimum, maximum)
         and value >= minimum and value <= maximum
 end
 
+local function color(value)
+    if integer(value, 0, 0xFFFFFFFF) then return string.format("%08X", value) end
+    if type(value) == "string" and #value == 8 and value:match("^%x+$") then return value:upper() end
+end
+
 local function windowPosition(value)
     return type(value) == "table" and integer(value.x, 0, 10000) and integer(value.y, 0, 10000)
 end
@@ -37,6 +43,8 @@ local function identity(value)
         and type(value.name) == "string" and (value.kind == "buff" or value.kind == "debuff")
         and (value.displayName == nil or type(value.displayName) == "string")
         and (value.tooltip == nil or type(value.tooltip) == "string")
+        and (value.duration == nil or (type(value.duration) == "number"
+            and value.duration > 0 and value.duration < math.huge))
 end
 
 local function validRule(rule)
@@ -51,7 +59,7 @@ end
 local function removeRule(data, key)
     data.rules[key] = nil
     local missingKey = "missing:" .. tostring(key)
-    for _, field in ipairs({ "hidden", "known" }) do
+    for _, field in ipairs({ "hidden", "known", "colors" }) do
         if type(data[field]) == "table" then data[field][missingKey] = nil end
     end
     if type(data.pins) == "table" then
@@ -83,9 +91,17 @@ function Settings.new(db, report)
     for key, value in pairs(stored or {}) do
         local valid
         if key == "settingsWindowPosition" then valid = windowPosition(value)
+        elseif key == "colorDefaults" then
+            valid = type(value) == "table"
+            if valid then
+                for kind in pairs(defaults.colorDefaults) do
+                    if type(value[kind]) ~= "string" or not color(value[kind]) then valid = false end
+                end
+                for kind in pairs(value) do if not defaults.colorDefaults[kind] then valid = false end end
+            end
         elseif ranges[key] then valid = integer(value, ranges[key][1], ranges[key][2])
         elseif key == "separate" or key == "replaceNative" or key == "dragLocked" then valid = type(value) == "boolean"
-        elseif key == "hidden" or key == "pins" or key == "rules" or key == "known" then
+        elseif key == "hidden" or key == "pins" or key == "rules" or key == "known" or key == "colors" then
             valid = type(value) == "table"
             local used, slots, entryCount = {}, {}, 0
             if valid then
@@ -94,6 +110,9 @@ function Settings.new(db, report)
                     local ok
                     if key == "rules" then
                         ok = validRule(item) and entryKey == item.id
+                    elseif key == "colors" then
+                        ok = identity(item) and entryKey == item.key
+                            and type(item.color) == "string" and color(item.color) ~= nil
                     elseif key == "hidden" or key == "known" then
                         ok = identity(item) and entryKey == item.key
                     else
@@ -131,6 +150,54 @@ function Settings:save(nextData)
     -- Apply configuration only after a successful persistent write.
     self.data = nextData
     return true
+end
+
+function Settings:colorFor(effect)
+    local entry = self.data.colors[effect.key]
+    local kind = effect.missing and "missing" or (effect.kind == "debuff" and "debuff" or "buff")
+    return tonumber(entry and entry.color or self.data.colorDefaults[kind], 16)
+end
+
+function Settings:setDefaultColor(kind, value)
+    local rgba = color(value)
+    if not defaults.colorDefaults[kind] or not rgba then
+        self.report("XBB: invalid default color")
+        return false
+    end
+    if self.data.colorDefaults[kind] == rgba then return true end
+    local data = copy(self.data)
+    data.colorDefaults[kind] = rgba
+    return self:save(data)
+end
+
+function Settings:resetDefaultColor(kind)
+    return self:setDefaultColor(kind, defaults.colorDefaults[kind])
+end
+
+function Settings:setColor(effect, value)
+    local rgba = color(value)
+    if not identity(effect) or not rgba then
+        self.report("XBB: invalid effect color")
+        return false
+    end
+    local previous = self.data.colors[effect.key]
+    if previous and previous.color == rgba and previous.name == effect.name and previous.kind == effect.kind then
+        return true
+    end
+    local data = copy(self.data)
+    data.colors[effect.key] = { key = effect.key, name = effect.name, kind = effect.kind, color = rgba }
+    return self:save(data)
+end
+
+function Settings:resetColor(key)
+    if type(key) ~= "string" or key == "" then
+        self.report("XBB: invalid effect color key")
+        return false
+    end
+    if not self.data.colors[key] then return true end
+    local data = copy(self.data)
+    data.colors[key] = nil
+    return self:save(data)
 end
 
 function Settings:resetPositions()
@@ -264,15 +331,22 @@ function Settings:enablePreset(preset, enabled)
         preset = preset, enabled = enabled })
 end
 
-function Settings:remember(snapshot)
+function Settings:remember(snapshot, durations)
     local data
     for _, item in ipairs(snapshot) do
         local previous = (data or self.data).known[item.key]
+        local duration = previous and previous.duration
+        if durations and durations[item.key] ~= nil then duration = durations[item.key] end
+        if duration ~= nil and (type(duration) ~= "number" or not (duration > 0 and duration < math.huge)) then
+            self.report("XBB: invalid learned duration")
+            return false
+        end
         if not previous or previous.name ~= item.name or previous.kind ~= item.kind
-            or previous.displayName ~= item.displayName or previous.tooltip ~= item.tooltip then
+            or previous.displayName ~= item.displayName or previous.tooltip ~= item.tooltip
+            or previous.duration ~= duration then
             data = data or copy(self.data)
             data.known[item.key] = { key = item.key, name = item.name, kind = item.kind,
-                displayName = item.displayName, tooltip = item.tooltip }
+                displayName = item.displayName, tooltip = item.tooltip, duration = duration }
         end
     end
     if data then return self:save(data) end

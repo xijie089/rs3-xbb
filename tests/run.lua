@@ -34,6 +34,103 @@ local function rows(model, config, now)
     return model:view(config.data, now or 0)[1].rows
 end
 
+test("category and individual colors preserve RGBA exactly across reloads", function()
+    local config, db = settings()
+    local buff, debuff = effect("buff:123", 20), effect("debuff:123", 20, "debuff")
+    equal(config:colorFor(buff), 0x357E89DD)
+    equal(config:colorFor(debuff), 0x965565DD)
+    equal(config:colorFor({ key = "missing:test", kind = "debuff", missing = true }), 0xB0485BEE)
+    equal(config:setDefaultColor("buff", 0xFFCC00DD), true)
+    equal(config:setDefaultColor("debuff", "12345678"), true)
+    equal(config:setDefaultColor("missing", 0xFF0000FF), true)
+    equal(config:setColor(buff, 0x00FF00A5), true)
+    equal(config:setColor(debuff, 0), true)
+    equal(db.values.settings.colors[buff.key].color, "00FF00A5")
+    equal(db.values.settings.colors[debuff.key].color, "00000000")
+    equal(db.values.settings.colorDefaults.buff, "FFCC00DD")
+    local loaded = Settings.new(db, error)
+    equal(loaded:colorFor(buff), 0x00FF00A5)
+    equal(loaded:colorFor(debuff), 0)
+    equal(loaded:colorFor(effect("other", 1)), 0xFFCC00DD)
+    equal(loaded:colorFor({ kind = "debuff", missing = true }), 0xFF0000FF)
+    equal(loaded:setColor(buff, "abcdef12"), true)
+    equal(db.values.settings.colors[buff.key].color, "ABCDEF12")
+end)
+
+test("color resets and unchanged selections avoid writes and rejected saves are atomic", function()
+    local config, db = settings()
+    local item = effect("buff:test")
+    local writes, set = 0, db.Set
+    db.Set = function(self, ...) writes = writes + 1; return set(self, ...) end
+    config:setColor(item, 0x12345678)
+    local before = writes
+    equal(config:setColor(item, 0x12345678), true)
+    equal(config:setDefaultColor("buff", 0x357E89DD), true)
+    equal(writes, before)
+    config:resetColor(item.key)
+    equal(config:colorFor(item), 0x357E89DD)
+    before = writes
+    equal(config:resetColor(item.key), true)
+    equal(writes, before)
+    config:setDefaultColor("buff", 0x11223344)
+    config:resetDefaultColor("buff")
+    equal(config:colorFor(item), 0x357E89DD)
+    config:setColor(item, 0x12345678)
+    local data, warnings = config.data, {}
+    config.report = function(message) warnings[#warnings + 1] = message end
+    db.Set = function() return false end
+    equal(config:setColor(item, 0xFFEEDDFF), false)
+    equal(config:resetColor(item.key), false)
+    equal(config:setDefaultColor("buff", 0), false)
+    equal(config.data, data)
+    equal(config:colorFor(item), 0x12345678)
+    equal(config.data.colorDefaults.buff, "357E89DD")
+    equal(#warnings, 3)
+end)
+
+test("invalid colors are reported without changing saved settings", function()
+    local config, db = settings()
+    local warnings, item = {}, effect("buff:test")
+    config.report = function(message) warnings[#warnings + 1] = message end
+    for _, value in ipairs({ -1, 0x100000000, 1.5, math.huge, "GG112233", "1234567", false, {} }) do
+        equal(config:setColor(item, value), false)
+        equal(config:setDefaultColor("buff", value), false)
+    end
+    equal(config:setColor({}, 0), false)
+    equal(config:setDefaultColor("invalid", 0), false)
+    equal(config:resetColor(nil), false)
+    equal(db.values.settings, nil)
+    equal(#warnings, 19)
+    db.values.settings = { width = 400, colors = {
+        [item.key] = { key = item.key, name = item.name, kind = "buff", color = "invalid" },
+    }, colorDefaults = { buff = "357E89DD" } }
+    local loaded = Settings.new(db, config.report)
+    equal(loaded.data.width, 400)
+    equal(next(loaded.data.colors), nil)
+    equal(loaded:colorFor(item), 0x357E89DD)
+    equal(#warnings, 21)
+end)
+
+test("effect colors survive metadata updates hiding pins and missing-warning deletion", function()
+    local config, db = settings()
+    local item = effect("buff:test", 20)
+    config:setColor(item, 0xAABBCCDD)
+    config:remember({ item }, { [item.key] = 20 })
+    config:hide(item)
+    config:pin(item, 2, true)
+    config:watch({ id = item.key, name = item.name, keys = { item.key }, enabled = true })
+    config:setColor({ key = "missing:" .. item.key, name = "Missing: test", kind = "debuff" }, 0x112233FF)
+    item.name, item.tooltip = "Renamed effect", "Full native details"
+    config:remember({ item }, { [item.key] = 20 })
+    config:removeWatch(item.key)
+    equal(config.data.colors["missing:" .. item.key], nil)
+    equal(config:colorFor(item), 0xAABBCCDD)
+    config:restore(item.key)
+    equal(Settings.new(db, error):colorFor(item), 0xAABBCCDD)
+    equal(config.data.known[item.key].duration, 20)
+    equal(config:findPin(item.key).reserve, true)
+end)
+
 test("permanent effects precede timed effects sorted longest first", function()
     local config = settings()
     local model = Model.new()
@@ -292,6 +389,389 @@ test("timers and fills decrease without new snapshots", function()
     equal(rows(model, config, 25)[1].fraction, 0)
 end)
 
+test("late timers infer duration from first appearance instead of native totals", function()
+    local config = settings()
+    local model = Model.new()
+    local item = effect("cooldown", nil, "debuff")
+    item.timing = "unknown"
+    model:update({ item }, 100)
+    model:update({ item }, 100.5)
+    item = effect("cooldown", 60, "debuff")
+    item.total = 120
+    model:update({ item }, 101)
+    equal(model.effects.cooldown.firstSeen, 100)
+    equal(model.effects.cooldown.duration, 61)
+    equal(rows(model, config, 101)[1].fraction, 60 / 61)
+    item.remaining, item.total = 59, 240
+    model:update({ item }, 102)
+    equal(model.effects.cooldown.duration, 61)
+    equal(rows(model, config, 102)[1].fraction, 59 / 61)
+    model:update({ item }, 102.5)
+    equal(model.effects.cooldown.duration, 61)
+    equal(rows(model, config, 103)[1].remaining, 58)
+end)
+
+test("live potion labels are minute lower bounds rather than exact seconds", function()
+    local config, model = settings(), Model.new()
+    local item = effect("cooldown", nil, "debuff")
+    item.timing = "unknown"
+    model:update({ item }, 0)
+    item = effect("cooldown", 120, "debuff")
+    item.timerPrecision = 60
+    model:update({ item }, 0.6)
+    model:update({ item }, 1.2)
+    item.remaining = 60
+    model:update({ item }, 1.8)
+    local row = rows(model, config, 1.8)[1]
+    equal(row.remaining, 120)
+    assert(row.fraction > 0.98)
+    equal(row.timer, "2:00")
+    assert(math.abs(model.durations.cooldown - 121.8) < 0.000001)
+    model:update({ item }, 2.4)
+    assert(math.abs(rows(model, config, 2.4)[1].remaining - 119.4) < 0.000001)
+    equal(rows(model, config, 2.4)[1].timer:sub(1, 1) == "~", false)
+    model:update({ item }, 60.6)
+    assert(rows(model, config, 60.6)[1].remaining > 60)
+    item.timerPrecision = 1
+    model:update({ item }, 61.8)
+    equal(rows(model, config, 61.8)[1].remaining, 60)
+    equal(rows(model, config, 61.8)[1].timer, "1:00")
+    assert(math.abs(model.effects.cooldown.duration - 121.8) < 0.000001)
+end)
+
+test("later minute transitions preserve natural progress instead of refilling the bar", function()
+    local model = Model.new()
+    local item = effect("timed", 120)
+    item.timerPrecision = 60
+    model:update({ item }, 0)
+    model:update({ item }, 0.6)
+    item.remaining = 60
+    model:update({ item }, 1.2)
+    assert(math.abs(model.effects.timed.duration - 121.2) < 0.000001)
+    model:update({ item }, 60.6)
+    item.timerPrecision = 1
+    model:update({ item }, 61.2)
+    local remaining, fraction, timer = Model.countdown(model.effects.timed, 61.2)
+    equal(remaining, 60)
+    assert(fraction > 0.49 and fraction < 0.5)
+    equal(timer, "1:00")
+    assert(math.abs(model.effects.timed.duration - 121.2) < 0.000001)
+end)
+
+test("a first coarse snapshot uses a compatible learned duration without a pending snapshot", function()
+    local model = Model.new({ ["debuff:11599"] = { duration = 120 } })
+    local item = effect("debuff:11599", 120, "debuff")
+    item.timerPrecision = 60
+    model:update({ item }, 100)
+    local remaining, fraction, timer = Model.countdown(model.effects[item.key], 100)
+    equal(remaining, 120)
+    equal(fraction, 1)
+    equal(timer, "~2:00")
+    item.remaining = 60
+    model:update({ item }, 100.6)
+    equal(select(3, Model.countdown(model.effects[item.key], 100.6)), "2:00")
+    model:update({ item }, 101.2)
+    equal(select(3, Model.countdown(model.effects[item.key], 101.2)):sub(1, 1) == "~", false)
+end)
+
+test("incompatible learned durations do not replace a first native time bucket", function()
+    for _, sample in ipairs({ { learned = 10, native = 120 }, { learned = 180, native = 60 } }) do
+        local model = Model.new({ timed = { duration = sample.learned } })
+        local item = effect("timed", sample.native)
+        item.timerPrecision = 60
+        model:update({ item }, 0)
+        equal(Model.countdown(model.effects.timed, 0), nil)
+        equal(model.effects.timed.estimated, true)
+        equal(model.durations.timed, sample.learned)
+    end
+end)
+
+test("coarse labels do not downgrade a compatible precise countdown", function()
+    local model = Model.new()
+    model:update({ effect("timed", 119) }, 0)
+    local item = effect("timed", 60)
+    item.timerPrecision = 60
+    model:update({ item }, 0.6)
+    local remaining, _, timer = Model.countdown(model.effects.timed, 0.6)
+    assert(math.abs(remaining - 118.4) < 0.000001)
+    equal(timer, "1:59")
+end)
+
+test("a coarse refresh restores uncertainty after an earlier calibration", function()
+    local model = Model.new()
+    local item = effect("timed", 120)
+    item.timerPrecision = 60
+    model:update({ item }, 0)
+    item.remaining = 60
+    model:update({ item }, 0.6)
+    equal(model.effects.timed.estimated, false)
+    item.remaining = 180
+    model:update({ item }, 1.2)
+    equal(model.effects.timed.estimated, true)
+    equal(select(3, Model.countdown(model.effects.timed, 1.2)), "~3:00")
+end)
+
+test("repeated coarse labels reject a cached clock that leaves their time bucket", function()
+    local model = Model.new({ timed = { duration = 120 } })
+    local item = effect("timed", 60)
+    item.timerPrecision = 60
+    model:update({ item }, 0)
+    equal(Model.countdown(model.effects.timed, 0), 120)
+    model:update({ item }, 62)
+    equal(Model.countdown(model.effects.timed, 62), nil)
+    equal(model.effects.timed.estimated, true)
+    equal(model.durations.timed, 120)
+end)
+
+test("live Bolt readings keep the full two-minute countdown through native minute text", function()
+    local model = Model.new({ ["debuff:11599"] = { duration = 120.62000274658203 } })
+    local item = effect("debuff:11599", nil, "debuff")
+    item.timing = "unknown"
+    model:update({ item }, 3186.840087890625)
+    item = effect(item.key, 120, "debuff")
+    item.timerPrecision = 60
+    model:update({ item }, 3187.43994140625)
+    item.remaining = 60
+    model:update({ item }, 3188.0400390625)
+    local remaining, _, timer = Model.countdown(model.effects[item.key], 3188.0400390625)
+    assert(remaining > 119 and remaining <= 121)
+    equal(timer, "2:00")
+    model:update({ item }, 3242.0400390625)
+    remaining, _, timer = Model.countdown(model.effects[item.key], 3242.0400390625)
+    assert(remaining > 65 and remaining < 67)
+    equal(timer:sub(1, 1) == "~", false)
+    item.timerPrecision = 1
+    model:update({ item }, 3247.43994140625)
+    equal(Model.countdown(model.effects[item.key], 3247.43994140625), 60)
+    assert(math.abs(model.effects[item.key].duration - 120.6) < 0.001)
+    item.remaining = 59
+    model:update({ item }, 3248.0400390625)
+    equal(select(3, Model.countdown(model.effects[item.key], 3248.0400390625)):sub(1, 1) == "~", false)
+end)
+
+test("uncalibrated coarse effects sort by native lower bounds without a false countdown", function()
+    local config, model = settings(), Model.new()
+    local first, second = effect("long", 120), effect("short", 60)
+    first.timerPrecision, second.timerPrecision = 60, 60
+    model:update({ effect("seconds", 59), second, first }, 0)
+    local result = rows(model, config)
+    equal(result[1].key, "long")
+    equal(result[2].key, "short")
+    equal(result[3].key, "seconds")
+    equal(Model.countdown(model.effects.long, 0), nil)
+    equal(result[1].fraction, 1)
+end)
+
+test("coarse transitions observed after long gaps do not become learned defaults", function()
+    local model = Model.new()
+    local item = effect("timed", 180)
+    item.timerPrecision = 60
+    model:update({ item }, 0)
+    item.remaining = 120
+    model:update({ item }, 30)
+    equal(model.durations.timed, nil)
+    equal(select(3, Model.countdown(model.effects.timed, 30)), "~2:00")
+end)
+
+test("calibrated minute and hour countdowns stay within one second across later uses", function()
+    for _, duration in ipairs({ 92, 187, 7250 }) do
+        local model = Model.new()
+        for cycle = 1, 2 do
+            local start = (cycle - 1) * (duration + 10)
+            local item = effect("timed")
+            item.timing = "unknown"
+            model:update({ item }, start)
+            for tick = 1, math.ceil(duration / 0.6) - 1 do
+                local elapsed = tick * 0.6
+                local remaining = duration - elapsed
+                local precision = remaining >= 3600 and 3600 or (remaining > 60 and 60 or 1)
+                item = effect("timed", precision > 1 and math.floor(remaining / precision) * precision
+                    or math.ceil(remaining))
+                item.timerPrecision = precision
+                model:update({ item }, start + elapsed)
+                if model.durations.timed then
+                    local actual, fraction = Model.countdown(model.effects.timed, start + elapsed)
+                    assert(math.abs(actual - remaining) <= 1, "calibrated countdown lost timer precision")
+                    assert(fraction >= 0 and fraction <= 1)
+                end
+            end
+            assert(math.abs(model.durations.timed - duration) <= 1, "learned duration is not calibrated")
+            model:update({}, start + duration + 0.6)
+            equal(next(model.effects), nil)
+        end
+    end
+end)
+
+test("precise readings correct a coarse initial duration in either direction", function()
+    for _, sample in ipairs({
+        { at = 2.4, remaining = 59 }, { at = 1.8, remaining = 160 }, { at = 0.6, remaining = 120 },
+    }) do
+        local model = Model.new()
+        local item = effect("timed", 120)
+        item.timerPrecision = 60
+        model:update({ item }, 0)
+        item.remaining, item.timerPrecision = sample.remaining, 1
+        model:update({ item }, sample.at)
+        local remaining, fraction, timer = Model.countdown(model.effects.timed, sample.at)
+        equal(remaining, sample.remaining)
+        assert(math.abs(model.effects.timed.duration - (sample.at + sample.remaining)) < 0.000001)
+        assert(fraction > 0.95 and fraction <= 1)
+        equal(timer:sub(1, 1) == "~", false)
+    end
+end)
+
+test("large downward timer corrections also correct the inferred full duration", function()
+    local model = Model.new()
+    model:update({ effect("timed", 120) }, 0)
+    model:update({ effect("timed", 60) }, 1.8)
+    assert(math.abs(model.effects.timed.duration - 61.8) < 0.000001)
+    local remaining, fraction = Model.countdown(model.effects.timed, 1.8)
+    equal(remaining, 60)
+    assert(fraction > 0.97)
+end)
+
+test("learned durations start pending countdowns without leaking across identities", function()
+    local model = Model.new()
+    model:update({ effect("buff:channeled", 10) }, 0)
+    for _, reset in ipairs({ "removed", "unavailable" }) do
+        if reset == "removed" then model:update({}, 10) else model:unavailable() end
+        local pending = effect("buff:channeled")
+        pending.timing = "unknown"
+        model:update({ pending }, 20)
+        equal(select(3, Model.countdown(model.effects[pending.key], 20)), "~10s")
+        model:update({ pending }, 21)
+        equal(Model.countdown(model.effects[pending.key], 21), 9)
+        local other = effect("debuff:channeled")
+        other.timing = "unknown"
+        model:update({ other }, 22)
+        equal(select(3, Model.countdown(model.effects[other.key], 22)), "")
+    end
+    model:update({ effect("buff:channeled") }, 30)
+    equal(select(3, Model.countdown(model.effects["buff:channeled"], 30)), "Active")
+end)
+
+test("a real timer overrides an incompatible learned duration", function()
+    local model = Model.new()
+    model:update({ effect("timed", 120) }, 0)
+    model:update({}, 120)
+    local item = effect("timed")
+    item.timing = "unknown"
+    model:update({ item }, 130)
+    equal(select(3, Model.countdown(model.effects.timed, 130)), "~2:00")
+    model:update({ effect("timed", 60) }, 130.6)
+    assert(math.abs(model.effects.timed.duration - 60.6) < 0.000001)
+    local remaining, fraction, timer = Model.countdown(model.effects.timed, 130.6)
+    equal(remaining, 60)
+    assert(fraction > 0.99)
+    equal(timer, "1:00")
+end)
+
+test("pending durations survive settings reloads without saving estimates", function()
+    local config, db = settings()
+    local model = Model.new()
+    local item = effect("buff:channeled", 10)
+    model:update({ item }, 0)
+    config:remember({ item }, model.durations)
+    local loaded = Settings.new(db, error)
+    equal(loaded.data.known[item.key].duration, 10)
+    model = Model.new(loaded.data.known)
+    item.remaining, item.timing = nil, "unknown"
+    model:update({ item }, 100)
+    equal(select(3, Model.countdown(model.effects[item.key], 100)), "~10s")
+    config:remember({ item }, model.durations)
+    equal(config.data.known[item.key].duration, 10)
+    item.timing, item.remaining, item.timerPrecision = "timed", 120, 60
+    model:update({ item }, 100.6)
+    config:remember({ item }, model.durations)
+    equal(config.data.known[item.key].duration, 10)
+    item.name = "Updated name"
+    config:remember({ item })
+    equal(config.data.known[item.key].duration, 10)
+    equal(config.data.known[item.key].name, "Updated name")
+    model:update({ effect("other", 20) }, 101)
+    equal(loaded.data.known[item.key].duration, 10)
+end)
+
+test("unchanged learned durations do not write and rejected changes are atomic", function()
+    local config, db = settings()
+    local item = effect("timed", 10)
+    config:remember({ item }, { timed = 10 })
+    db.Set = function() error("unchanged duration must not write") end
+    equal(config:remember({ item }, { timed = 10 }), true)
+    local before, warnings = config.data, {}
+    config.report = function(message) warnings[#warnings + 1] = message end
+    db.Set = function() return false end
+    equal(config:remember({ item }, { timed = 20 }), false)
+    equal(config.data, before)
+    equal(config.data.known.timed.duration, 10)
+    equal(#warnings, 1)
+end)
+
+test("invalid learned durations are reported rather than loaded or saved", function()
+    for _, duration in ipairs({ 0, -1, math.huge, 0 / 0, "10", false }) do
+        local config, db = settings()
+        local item = effect("timed", 10)
+        item.duration = duration
+        db.values.settings = { width = 400, known = { timed = item } }
+        local warnings = {}
+        config = Settings.new(db, function(message) warnings[#warnings + 1] = message end)
+        equal(config.data.width, 400)
+        equal(config.data.known.timed, nil)
+        equal(#warnings, 1)
+        equal(config:remember({ item }, { timed = duration }), false)
+        equal(#warnings, 2)
+    end
+end)
+
+test("already active effects start full after startup removal or source recovery", function()
+    local config = settings()
+    local item = effect("cooldown", 40, "debuff")
+    item.total = 120
+    for _, reset in ipairs({ "new", "removed", "unavailable" }) do
+        local model = Model.new()
+        model:update({ item }, 100)
+        equal(rows(model, config, 100)[1].fraction, 1)
+        if reset == "new" then model = Model.new()
+        elseif reset == "removed" then model:update({}, 110)
+        else model:unavailable() end
+        item.remaining = 20
+        model:update({ item }, 120)
+        equal(model.effects.cooldown.firstSeen, 120)
+        equal(model.effects.cooldown.duration, 20)
+        equal(rows(model, config, 120)[1].fraction, 1)
+        item.remaining = 40
+    end
+end)
+
+test("temporary timing loss retains the observed duration baseline", function()
+    local config = settings()
+    local model = Model.new()
+    model:update({ effect("timed", 60) }, 0)
+    local item = effect("timed")
+    item.timing = "unknown"
+    model:update({ item }, 10)
+    equal(rows(model, config, 10)[1].timer, "?")
+    equal(model.effects.timed.firstSeen, 0)
+    equal(model.effects.timed.duration, 60)
+    item = effect("timed", 50)
+    item.total = 120
+    model:update({ item }, 11)
+    equal(model.effects.timed.duration, 60)
+    equal(rows(model, config, 11)[1].fraction, 50 / 60)
+end)
+
+test("refreshes extend observed durations without adding time since first appearance", function()
+    local config = settings()
+    local model = Model.new()
+    local item = effect("timed", 20)
+    item.total = 120
+    model:update({ item }, 0)
+    item.remaining = 30
+    model:update({ item }, 10)
+    equal(model.effects.timed.duration, 30)
+    equal(rows(model, config, 10)[1].fraction, 1)
+end)
+
 test("unchanged rounded native timers do not keep extending expiry", function()
     local config = settings()
     local model = Model.new()
@@ -307,6 +787,25 @@ test("refreshes refill a bar and missing effects disappear", function()
     model:update({ effect("timed", 30) }, 10)
     equal(#rows(model, config, 10), 1)
     equal(rows(model, config, 10)[1].fraction, 1)
+end)
+
+test("held second-level readings refresh after the countdown leaves their rounding range", function()
+    local config = settings()
+    local model = Model.new()
+    local item = effect("timed", 20)
+    item.stacks = 1
+    model:update({ item }, 0)
+    model:update({ item }, 0.6)
+    equal(rows(model, config, 0.6)[1].remaining, 19.4)
+    item.stacks = 3
+    model:update({ item }, 2.4)
+    equal(rows(model, config, 2.4)[1].remaining, 20)
+    equal(rows(model, config, 2.4)[1].fraction, 1)
+    model:update({ item }, 7.8)
+    equal(rows(model, config, 7.8)[1].remaining, 20)
+    item.remaining = 19
+    model:update({ item }, 9)
+    assert(rows(model, config, 9)[1].remaining < 20)
 end)
 
 test("rounded server samples do not jump countdowns at sample boundaries", function()
@@ -489,7 +988,7 @@ test("unknown duration is never presented as permanent", function()
     equal(rows(model, config)[1].timer, "Active")
 end)
 
-test("new timers stay blank until resolved and later timing loss remains explicit", function()
+test("unseen timers stay blank and learned durations survive later timing loss", function()
     local config = settings()
     local model = Model.new()
     local item = { key = "buff:starting", name = "Starting buff", kind = "buff", timing = "unknown" }
@@ -506,7 +1005,7 @@ test("new timers stay blank until resolved and later timing loss remains explici
     equal(rows(model, config, 1.6)[1].timer, "?")
     model:update({}, 2)
     model:update({ item }, 3)
-    equal(rows(model, config, 3)[1].timer, "")
+    equal(rows(model, config, 3)[1].timer, "~31s")
     model:update({ effect(item.key) }, 3.6)
     equal(rows(model, config, 3.6)[1].timer, "Active")
 end)
@@ -516,6 +1015,12 @@ test("countdown formatting is readable at second minute and hour boundaries", fu
     equal(Model.formatTime(10.1), "11s")
     equal(Model.formatTime(60), "1:00")
     equal(Model.formatTime(3601), "1:00:01")
+end)
+
+test("floating-point subtraction does not add a whole second to countdowns", function()
+    equal(Model.formatTime(60 + 0.000000000001), "1:00")
+    equal(Model.formatTime(59 + 0.000000000001), "59s")
+    equal(Model.formatTime(60.001), "1:01")
 end)
 
 test("invalid settings and failed writes are visible and never applied", function()

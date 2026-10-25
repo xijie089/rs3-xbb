@@ -23,16 +23,13 @@ function Hud:bindDrag(component, stack)
     component:Subscribe(ui.Hook.ONCLICK, function() self:beginDrag(stack) end)
 end
 
-function Hud.new(parent, settings, openSettings)
+function Hud.new(parent, settings)
     local self = setmetatable({ parent = parent, settings = settings, rows = {}, stacks = {} }, Hud)
     for _, kind in ipairs({ "buff", "debuff" }) do
         local stack = { kind = kind, rows = {} }
         self.stacks[kind] = stack
         stack.root = UI.layer(parent, 0, 0, 340, 600)
         stack.heading = UI.text(stack.root, 0, 0, 220, 28, "")
-        if kind == "buff" then
-            stack.settingsButton = UI.button(stack.root, 230, 0, 100, "Settings", openSettings)
-        end
         stack.status = UI.text(stack.root, 0, 30, 340, 24, "")
         stack.body = UI.layer(stack.root, 0, 30, 340, 570)
         stack.scroll = function(_, delta)
@@ -162,8 +159,7 @@ function Hud:renderStack(stack, effects, issue)
     stack.root:SetPos(math.max(0, math.min(x, self.parent.width - config.width)),
         math.max(0, math.min(y, self.parent.height - 80)))
     stack.root:SetSize(config.width, math.max(80, self.parent.height - stack.root.y))
-    if stack.settingsButton then stack.settingsButton:SetPos(math.max(0, config.width - 100), 0) end
-    stack.heading:SetSize(math.max(0, config.width - (stack.settingsButton and 105 or 0)), 28)
+    stack.heading:SetSize(config.width, 28)
     stack.heading.content = "XBB / " .. (config.separate
         and (stack.kind == "debuff" and "Debuffs" or "Buffs") or "Buffs / Debuffs")
     stack.status:SetSize(config.width, 24)
@@ -178,13 +174,14 @@ function Hud:renderStack(stack, effects, issue)
     stack.body:SetScrollSize(config.width, math.max(stack.body.height, contentHeight))
     stack.body:SetScrollPos(0, math.min(stack.body.scrollY, stack.scrollMaximum))
     for index, effect in ipairs(effects) do
+        local color = self.settings:colorFor(effect)
         local row = stack.rows[index]
         if not row then
             row = { layer = UI.layer(stack.body, 0, 0, 1, 1), stack = stack }
             self:bindDrag(row.layer, stack)
             row.layer:Subscribe(ui.Hook.ONSCROLLWHEEL, stack.scroll)
             row.background = UI.rectangle(row.layer, 0, 0, 1, 1, 0x122028F2)
-            row.fill = UI.rectangle(row.layer, 0, 0, 1, 1, 0x367D87CC)
+            row.fill = UI.rectangle(row.layer, 0, 0, 1, 1, color)
             row.name = UI.text(row.layer, 10, 0, 1, 1, "")
             row.timer = UI.text(row.layer, 0, 0, 1, 1, "", ui.AlignMode.BOTTOMRIGHT)
             stack.rows[index] = row
@@ -196,7 +193,7 @@ function Hud:renderStack(stack, effects, issue)
         row.layer.alpha = effect.active and 1 or 0.35
         row.background:SetSize(config.width, config.height)
         row.fill:SetSize(math.floor(config.width * effect.fraction), config.height)
-        row.fill.rgba = effect.missing and 0xB0485BEE or (effect.kind == "debuff" and 0x965565DD or 0x357E89DD)
+        row.fill.rgba = color
         row.name:SetSize(config.width - 108, config.height)
         row.name.content = (effect.stacks and (effect.stacksPercent and effect.stacks .. "% " or effect.stacks .. " ") or "")
             .. (not effect.active and "Reserved: " or "") .. (effect.displayName or effect.name)

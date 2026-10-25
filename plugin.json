@@ -1,7 +1,10 @@
 {
-  "name": "XBB (XijieBuffBars)",
-  "version": "0.1.1",
+  "name": "Xijie Buff Bars",
+  "version": "0.2.0",
   "contactEmailAddress": "xijie@xijie089.com",
   "hasSettingsIcon": true,
-  "requiredDependencies": {}
+  "hasRibbonIcon": true,
+  "requiredDependencies": {
+    "prettyui": 6398181
+  }
 }

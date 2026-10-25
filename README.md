@@ -1,13 +1,127 @@
-# XBB / XijieBuffBars
+# XBB / Xijie Buff Bars
 
-A Lua RuneScape plugin that displays your buffs and debuffs as stacked,
-decreasing progress bars with names and readable countdowns. No icons.
+XBB shows your RuneScape buffs and debuffs as bars with names, countdowns,
+and stack counts. No icons.
 
-**Beta development build; not yet approved for Plugin Hub distribution.**
+**Beta build. Awaiting Plugin Hub approval.**
 
-## Installation
+Requires [PrettyUI](https://mod.io/g/runescape/m/prettyui).
 
-Build from source with Lua 5.4, `luac`, and Make:
+## Getting started
+
+1. Open RuneScape's **Settings > Gameplay > Interfaces > Buff Bar** and turn on
+   the effects you want to track. XBB follows these filters.
+2. Open **Plugins > XB > Open full settings**. The tab's full name is
+   **Xijie Buff Bars**. You can also open settings through Plugin Hub.
+3. Right-click a bar to hide or pin it. Buffs also offer **Warn when missing**.
+4. To move the bars, hold **Ctrl**, left-click a header or bar, then move the
+   mouse. Release **Ctrl** to save. The mouse button does not need to stay held.
+
+The Plugins launcher has quick options for separate stacks, replacing the
+original bars, and locking bar dragging.
+
+| Settings tab | Controls |
+| --- | --- |
+| Display | Separate stacks, original bars, bar size and spacing, drag lock, position reset |
+| Hidden | Restore hidden effects |
+| Pins | Slot numbers, reservations, and unpinning |
+| Missing | Missing-buff presets and custom warnings |
+| Observed | Pin, hide, watch, or color effects XBB has seen |
+| Colors | Default colors and individual overrides |
+
+## Bars and timers
+
+Buffs and debuffs share one stack by default. Enable **Separate buff/debuff
+stacks** in Display to split them. Scroll over the bars if the list is too tall.
+
+Pins take priority. The remaining effects sort in this order:
+
+1. Untimed effects, alphabetically.
+2. Timed effects, longest remaining duration first.
+3. Effects whose timing cannot yet be read.
+
+Untimed effects show **Active**. Countdowns show tenths below ten seconds,
+seconds below one minute, then `m:ss` or `h:mm:ss`. Stack counts and percentages
+appear before the name. Cooldowns are labelled **CD**.
+
+XBB remembers effect durations and uses them when the game's timer is pending
+or rounded. A `~` marks an estimate. A blank timer means no timing is available
+yet; `?` means a previously readable timer has become unavailable.
+
+Bars start full when XBB first sees an effect. Refreshes can refill them.
+An effect stays visible while the game reports it, even if its countdown
+reaches zero.
+
+Hover over a bar for its description, when available. Long tooltips can be
+scrolled.
+
+## Colors
+
+**Colors** sets the default color and opacity for buffs, debuffs, and missing
+warnings. A category's **Reset** restores its original color.
+
+Use **Observed > Custom color** to give an effect its own color. Custom colors
+are listed below the defaults in Colors. **Reset**, or **Reset color** in
+Observed, removes the override and restores the category color.
+
+## Hiding and pins
+
+Undo **Hide in XBB** with **Hidden > Restore** or **Observed > Unhide**.
+
+Right-click a bar to pin its current slot, or use **Observed > Pin** to take
+the first free slot. Change its slot or reservation in Pins.
+
+- A reserved pin leaves a dim placeholder while the effect is absent.
+- An absent pin without a reservation collapses.
+- Hiding a pinned effect also hides its reservation.
+
+Slots range from 1 to 100 per stack. Moving a pin into an occupied slot swaps
+the two. Separate stacks have independent slots; combining them moves
+collisions to the next free slot.
+
+## Missing-buff warnings
+
+Missing-buff warnings are off by default. Enable a preset in Missing, or choose **Warn when
+missing** for a buff in Observed or its right-click menu.
+
+Presets cover potions, pocket books, incense, combat powders, and other upkeep
+buffs. Any matching overload satisfies the overload preset. A pocket book
+needs an active buff; equipping it alone does not count.
+
+Use **Remove warning** in Observed, **Remove missing warning** in the right-click
+menu, or **Missing > Delete** to remove a custom warning. Presets can be enabled
+or disabled instead.
+
+Warnings also show outside combat. Hidden buffs still count as present.
+Warnings pause when XBB cannot read the native bars. Presets match English
+names; custom warnings track the selected effect. Not every preset variant
+has been checked in-game.
+
+## Position and dragging
+
+Buffs and debuffs keep separate positions when split. The combined stack uses
+the buff position. **Display > Reset positions** resets both bar stacks, not
+the settings window.
+
+Drag the settings window by its title bar. Window and bar positions are saved
+between sessions.
+
+## Local data and native bars
+
+XBB requests no permissions and sends no data to external services. Settings
+and observed effect data are saved locally through `PersistentDB`.
+See [MODIO.md](MODIO.md#required-disclosures) for the full disclosures.
+
+**Replace original bars** hides the game's bars while XBB is running. The
+originals return if XBB cannot read them, when you log out, or when the plugin
+stops.
+
+Unnamed effects show **Unknown buff #123** or **Unknown debuff #123**.
+Errors and diagnostic details are written to the client console.
+
+## Build and install
+
+Requires Lua 5.4, `luac`, and Make:
 
 ```sh
 git clone https://github.com/xijie089/rs3-xbb.git
@@ -15,274 +129,45 @@ cd rs3-xbb
 make package
 ```
 
-Copy `dist/XBB/` to `dev_plugins/XBB/` within your beta client's cache folder.
-The official tutorial lists these example locations:
+Copy `dist/XBB/` to `dev_plugins/XBB/` in the beta client's cache folder:
 
 | Installation | Cache folder |
 | --- | --- |
 | Windows | `C:\ProgramData\Jagex\RuneScape-BETA` |
-| Linux / Bolt | `~/.local/share/bolt-launcher/jagex/RuneScape-BETA` |
+| Linux / Bolt | `~/.local/share/bolt-launcher/Jagex/RuneScape-BETA` |
 
-For Steam/Proton, use the `RuneScape-BETA` folder beneath the game's installation
-directory.
+For Steam/Proton, use `RuneScape-BETA` beneath the game's installation directory.
 
-Open the beta client console with Alt + the key beneath Escape. Refresh the
-plugin list with `prf`, enable with `pon XBB`, and reload with `prl XBB`.
-Open settings from the XBB header or the Plugin Hub settings icon.
-
-## Getting started
-
-1. Open RuneScape's **Settings > Gameplay > Interfaces > Buff Bar** and turn on
-   the items you want to track. XBB follows these visibility filters.
-2. Open XBB settings using the **Settings** button on the buff header or the
-   Plugin Hub settings icon. **Display** controls bar size, combined or separate
-   stacks, and **Replace original bars**.
-3. Right-click a bar to hide or pin it. A pinned bar also offers **Reserve slot
-   when absent**. For buffs, **Warn when missing** adds an optional reminder.
-4. Hold **Ctrl** and left-click a buff/debuff header or bar to move its stack. Release
-   **Ctrl** to save the position.
-5. Hold the **left mouse button** on the settings window's title bar to move it.
-   Release to save its position across reopening, plugin reloads, and game restarts.
-
-XBB requests no permissions and has no external plugin dependencies. Settings
-and observed effect metadata (identities, original and short names, and hover
-text) are saved locally between sessions through `PersistentDB`. XBB does not
-transmit data or collect information about other players.
-
-## Ordering and appearance
-
-Unpinned effects sort as follows:
-
-1. Untimed effects, alphabetically.
-2. Timed effects, longest remaining duration to shortest.
-3. Effects whose remaining duration cannot yet be read.
-
-Untimed means no readable duration is supplied, not that an effect can never
-end. These bars show **Active**. Timed bars show tenths below ten seconds,
-seconds below one minute, then `m:ss` or `h:mm:ss`. Stack counters are shown
-before the name without a multiplier prefix (for example, **5 Incite Fear**
-or **30 Bone Shield**), never interpreted as seconds.
-Percentage values retain their unit, for example **6% Clan avatar boost**.
-New bars leave the timer blank until timing is first resolved. If previously
-resolved timing becomes unreadable, the timer shows `?`.
-
-Bars use native ability titles where available and shorten Aftershock to
-**47% Aftershock**, for example. Hover details appear only when the full text
-differs from the displayed name, not just because of a count or percentage prefix.
-Long native hover details can be scrolled. Quiver bars show the selected
-ammunition, for example **Quiver: Bik arrows**, and update when it changes.
-Full native hover text takes precedence over shorter descriptions. Some effects
-use a built-in explanation when the API does not expose their full description.
-XBB includes compact names for 275 effects.
-Cooldowns use **CD**, including **Ritual shard CD** and **Excalibur CD**.
-Distinct effects retain separate labels, such as legendary-pet ability
-cooldowns and Deep Sea Fishing bonuses. Stack and percentage prefixes remain
-separate from the short name; full native details remain available on hover.
-
-Progress uses the native total duration when available. Otherwise it uses the
-longest remaining duration observed for that activation. Refreshes can refill a
-bar. A countdown reaching zero does not remove a still-observed native effect.
-Small countdown corrections blend smoothly; refreshes and native zero readings
-apply immediately.
-
-Buffs and debuffs share one stack by default. **Settings > Display** can split
-them into independently positioned stacks. The single-line header reads
-**XBB / Buffs / Debuffs** when combined, or **XBB / Buffs** and **XBB / Debuffs**
-when separated. A second line appears only for source warnings or drag status.
-The Settings button appears only on the buff/combined panel.
-The settings window header reads **XBB / Xijie Buff Bars / {Tab}**.
-Debuffs are rose-coloured; missing-buff warnings are
-red and explicitly labelled **Missing**. Width, height, spacing, and native HUD
-position are configurable. Scroll over native bars when the list exceeds the
-available height.
-
-In the native client, hold **Ctrl**, then **left-click** a stack's header or
-one of its bars to start moving it. Move the mouse while keeping Ctrl held;
-the mouse button does not need to stay down. Release **Ctrl** to save.
-Dragging preserves the grab offset, accounts for interface scaling, and keeps
-the stack within the game area. Buffs and debuffs remember independent positions
-when separated; the combined stack uses the buff position.
-**Settings > Display > Lock dragging** disables Ctrl-click bar movement only.
-**Reset positions** restores both stacks without changing other settings,
-including the drag lock and settings-window position.
-
-The settings window moves separately: hold the **left mouse button** on its
-title bar and drag, then release to save. No Ctrl modifier is needed, and the
-window stays movable when bar dragging is locked. It remembers its position
-through tab changes, closing and reopening, plugin reloads, and game restarts.
-The first opening is centred; saved positions are constrained to the available
-interface area if its dimensions change.
-
-## Hiding and pins
-
-**Hide in XBB** hides that effect across subsequent appearances and reloads.
-**Settings > Hidden > Restore** makes it eligible to appear again.
-
-Pins override automatic sorting. Right-click a bar to pin its current slot;
-**Settings > Pins** changes its slot and reservation or removes the pin.
-In the native **Observed** page, **Pin** selects the first free slot in that
-effect's stack. The controls switch to **Unpin** and **Unhide** for pinned or
-hidden effects, so both actions can be undone without leaving Observed.
-Open settings refresh after bar-menu actions without changing tabs. Hidden,
-Pins, Missing, and Observed use the same compact names as the bars, including
-previously saved entries. Custom missing bars and reserved pins use those names too.
-
-- An active pin occupies its configured slot.
-- A **reserved** pin leaves a dim, labelled placeholder while absent.
-- A non-reserved absent pin collapses, shifting later pins up one slot.
-- Hiding a pinned effect suppresses its reservation too. Restoring it retains
-  its pin configuration.
-
-Slots range from 1 to 100 per stack. Moving into an occupied pin slot swaps
-the two pins. Separate stacks have independent positions. When combining them,
-colliding positions move to the next free slot in stable identity order.
-
-Effect identity uses the native buff struct ID when available, otherwise
-the effect's name and buff/debuff category. It does not use the changing
-on-screen icon slot. Name-based identities can change with client language.
-
-## Missing combat buffs
-
-Missing checks start disabled. A missing effect is displayed as an untimed
-pseudo-debuff, for example **Missing: Overload** or **Missing: Pocket book**.
-It can be hidden and pinned like any other row.
-
-**Settings > Missing** contains nineteen upkeep presets: overload variants,
-pocket books/scriptures/grimoires, weapon poison, antifire, antipoison, prayer
-renewal, aggression, familiar, Animate Dead, Darkness, bonfire boost,
-five incense types, and three combat powders. Any matching member satisfies
-a preset; an elder overload does not require a regular overload as well.
-Pocket-book checks look for an active buff, not an equipped inventory item
-or the occasional damage proc.
-
-Coverage is not limited to these presets or to Magic. **Any observed combat
-buff** can be watched using **Warn when missing** or **Settings > Observed**,
-including prayers, ability buffs, stacks, and buffs added in later game
-updates. Observed identities are saved so inactive effects remain configurable.
-Observed displays and sorts by short names, with a **Buff** or
-**Debuff** label. Compact names and available hover details
-are retained across settings reloads; original names and effect identities stay
-unchanged.
-
-Preset families use English display-name matching. Exact client names and the
-meaning of each native activation indicator still need beta verification;
-the preset list is not a claim that every variant has been verified in-game.
-Custom observed-buff monitors use effect identity instead.
-In **Observed**, **Warn when missing** adds a custom warning and **Remove warning**
-deletes it. The equivalent right-click action is **Remove missing warning**.
-Custom warnings also have a **Delete** action in **Missing**;
-deletion clears the warning's reserved pin and hidden state without changing the
-original buff's settings. Global presets retain their enabled/disabled controls.
-While an active buff's name is unavailable, name-based family checks pause to
-avoid false missing warnings. Exact-identity monitors continue to work, and
-family checks resume when every active buff has a known name.
-
-Warnings use actual observed buff presence, even if its bar is hidden in XBB.
-They do not activate abilities, select a prayer or combat style, or predict
-upcoming mechanics. All missing warnings are suppressed when the source is
-unavailable. They are not restricted to being in combat.
-
-## Native integration
-
-Native buff scans run after server updates. Layout and labels update at 10 Hz;
-countdowns and drag input update at the 50 Hz client-logic cadence. Repeated
-rounded timer samples retain their expiry. Downward corrections of at most one
-second blend over two seconds; increases, larger corrections, and zero readings
-apply immediately.
-
-`xbb/short_names.lua` holds the compact names, struct IDs, original text, and
-optional heading aliases. Native effect configs take precedence, followed by
-stable effect IDs, including absent reserved pins. Full-text lookup ignores
-case and surrounding spaces. Heading aliases match text before a colon or line
-break; all lookup tables are derived from the same entries.
-Title-only effects use `COMBATV2_ABILITY_INFO` description fields, including
-Bone Shield and Gladiator's Rage. Scripted effects without an exposed
-description use `nativeDetails` in `xbb/catalog.lua`; Searing Winds describes
-its 20% bonus ranged damage.
-
-The native adapter uses documented UI inspection APIs to read the built-in
-`BUFF_BAR` and `DEBUFF_BAR` slots,
-their names, typed progress overlays, and visible timer text. The exact
-component/metadata layout is provisional.
-Known structs without an ability-name parameter have explicit display names in
-`xbb/catalog.lua`, including the clan avatar boost and pocket-book activation.
-Client-provided names take precedence, followed by referenced item display
-names. When a book uses an object override but exposes no readable override
-item, the active book timer uses the item in the worn pocket slot instead.
-Its remaining charge comes from the native client book-timer end variable,
-converted from 50 Hz client-clock units to seconds. If that inventory or timer
-data is unavailable, the name falls back to **Pocket book** and the timer stays
-blank initially, or shows `?` after earlier successful readings.
-Selected quiver ammunition comes from the typed `QUIVER_ACTIVE_AMMO` player
-variable. An unreadable selection is labelled **Quiver ammo (unavailable)**.
-Other unnamed effects display **Unknown buff #123** or
-**Unknown debuff #123**, using their stable struct ID. Their bars, readable
-timers, hiding, pins, and identity-based monitors still work. A nonblocking
-status warning reports unavailable names; internal config names are not
-converted into guessed display names. A slot without either a name or a
-stable identity remains a source error.
-Visible layout containers with no visible content, name, buff metadata, or
-actions are empty slots, not unnamed effects. Unrelated layout parameters do
-not establish an active buff. Child visibility is read locally, independently
-of ancestor visibility.
-
-The adapter reads the fifty exposed slots in each bar. Buffs suppressed by the
-game's own visibility filters are not observable through this source. Open
-**Settings > Gameplay > Interfaces > Buff Bar** and turn on the items you want
-XBB to track.
-
-The original render layers and their visible components are made transparent
-only after a complete readable snapshot. Icons, timer labels, and progress
-overlays are updated individually rather than relying on inherited opacity.
-They remain active so native timers keep updating while XBB replaces their visuals.
-Opacity is reapplied on each [draw event](https://developer.runescape.com/rs/core/events.html#draw)
-after a visual-only walk of both bars' fifty slots. Newly created icons and
-labels are discovered on the next draw instead of waiting for a server update.
-These frame updates do not read buff metadata or timers or rebuild XBB's layout.
-On source failure, replacement is disabled, the original opacity is restored,
-an error is displayed/logged, and missing warnings are suppressed. The original
-opacity is also restored on logout, disable, or shutdown.
-An unnamed effect logs an `XBB diagnostic:` line in the client console with
-its visible component types, labels, and available metadata. Diagnostics are
-logged once per unchanged warning or error until recovery, with the first
-unnamed effect's details when multiple names are unavailable.
-
-Numeric-only text is treated as seconds only when metadata identifies it as
-non-stack content. Unsupported text remains unknown rather than inventing a
-duration. Legacy `paramsConfig` metadata access is documented as potentially
-removable; this adapter may need updates as the API evolves.
+Open the beta console with Alt + the key beneath Escape. Run `prf` to refresh
+the plugin list, `pon XBB` to enable XBB, and `prl XBB` to reload it.
 
 ## Development
 
 ```sh
-make test       # Lua model, native adapter, UI/lifecycle mocks, syntax
-make package    # Validate and assemble dist/XBB
-make submission # Also create dist/XBB.zip for Mod.io
+make test       # Lua tests and syntax checks
+make package    # Test and assemble dist/XBB
+make submission # Also build dist/XBB.zip
 ```
 
-Local checks require `lua`, `luac`, and Make. The beta client runs Lua 5.4.8.
-The submission target additionally uses Python 3's standard-library ZIP tool;
-no Python packages are required. Packaging recreates `dist/XBB/` from runtime
-source files so removed modules cannot remain in the output.
-The test suites exercise model behavior and the native UI through mocks.
-Use the beta client to verify actual rendering, native timer updates, and
-RuneScape API integration.
+The ZIP target requires Python 3. The archive contains `main.lua`, `plugin.json`,
+and `xbb/` at its root.
 
-## Mod.io submission
+To run the settings tests against an extracted PrettyUI release:
 
-Version **0.1.0** has been submitted to Mod.io and is awaiting moderation.
-Version **0.1.1** adds movable settings with saved positions and is prepared for
-the next upload.
-[`MODIO.md`](MODIO.md) records the listing fields, next-upload description,
-changelog, and required disclosures. [`media/listing.png`](media/listing.png) is the 1280x720
-listing artwork; its editable source is [`media/listing.svg`](media/listing.svg), which uses the
-native-client crop [`media/native-bars.png`](media/native-bars.png). The banner
-combines branding with an actual XBB capture. Additional native captures can be
-used for the gallery.
+```sh
+lua tests/prettyui_contract.lua /path/to/prettyui
+```
 
-`make submission` builds `dist/XBB.zip` with `main.lua`, `plugin.json`, and `xbb/`
-directly at the archive root. The Mod.io upload form offers Windows, Mac, Linux,
-and Source as platform selections.
+## Feedback and collaboration
 
-Combat overlays, missing-buff reminders, and menu customization are subject to
-additional review. Submission does not constitute moderation approval.
+Use the [XBB Discord channel](https://discord.com/channels/1523582684109082645/1561934868353384458)
+for issue reports and collaboration requests.
+
+## Release files
+
+[CHANGELOG.md](CHANGELOG.md) covers each version.
+[MODIO.md](MODIO.md) contains the listing text and required disclosures.
+
+The listing banner is [media/listing.png](media/listing.png). Its editable source
+is [media/listing.svg](media/listing.svg), using the client capture
+[media/native-bars.png](media/native-bars.png).

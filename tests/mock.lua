@@ -48,7 +48,7 @@ function Node:Destroy()
 end
 function M.node(parent, kind)
     local node = setmetatable({ children = {}, hooks = {}, hidden = false, visible = true, alpha = 255, type = kind,
-        text = {}, parent = parent, scrollX = 0, scrollY = 0,
+        text = {}, parent = parent, interfaceID = parent and parent.interfaceID or 1, scrollX = 0, scrollY = 0,
         width = 1000, height = 800, x = 0, y = 0 }, Node)
     if parent then parent.children[#parent.children + 1] = node end
     return node
@@ -60,6 +60,15 @@ function M.find(node, label)
         local found = M.find(child, label)
         if found then return found end
     end
+end
+function M.click(root, label)
+    local node = assert(M.find(root, label), "missing control: " .. label)
+    while node do
+        local callback = node.hooks[ui.Hook.ONCLICK] or node.hooks[ui.Hook.ONBUTTONPRESSED]
+        if callback then return callback(node, 0, 0) end
+        node = node.parent
+    end
+    error("control is not clickable: " .. label)
 end
 function M.startDrag(component)
     component.hooks[ui.Hook.ONCLICK]()
@@ -93,9 +102,11 @@ function M.install()
         components[prefix .. "__BUFF_RENDER_LAYER"] = { hidden = false, alpha = 255 }
         for i = 1, 50 do components[prefix .. "__BUFF_" .. i] = { visible = false } end
     end
-    ui.Interfaces = { GetComponent = function(_, name) return components[name] end }
+    ui.Interfaces = { GetComponent = function(_, name) return components[name] end,
+        GetInterface = function() return {} end }
+    components.TOPLEVEL_V2__GAME_AREA.interfaceID = 1
     _G.Event = {}
-    for _, name in ipairs({ "ServerLogic", "Draw", "MiniMenuReady", "SettingsLayerReady", "WindowFocusChanged" }) do
+    for _, name in ipairs({ "ServerLogic", "Draw", "MiniMenuReady", "SettingsLayerReady", "ContentLayerReady", "WindowFocusChanged" }) do
         events[name] = {}
         Event[name] = {
             Subscribe = function(key, callback) events[name][key] = callback end,
@@ -121,6 +132,7 @@ function M.install()
     components.TOPLEVEL_V2__GAME_AREA.xyGlobal = { x = 0, y = 0 }
     _G.warn = function(message) warnings[#warnings + 1] = message end
     _G.log = function(message) messages[#messages + 1] = message end
+    _G.prettyui = require("tests/prettyui_mock")(M)
     return { components = components, events = events, db = db, warnings = warnings, messages = messages, input = input,
         availability = function(value) available = value end }
 end

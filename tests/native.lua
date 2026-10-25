@@ -15,8 +15,86 @@ test("native manifest uses object dependencies and omits unused permissions", fu
     local file = assert(io.open("plugin.json", "r"))
     local metadata = file:read("*a")
     file:close()
+    assert(metadata:match('"name"%s*:%s*"Xijie Buff Bars"'), "use the full three-word plugin name")
     assert(metadata:match('"requiredDependencies"%s*:%s*{'), "native dependencies must be an object")
+    assert(metadata:match('"prettyui"%s*:%s*6398181'), "PrettyUI must be a required dependency")
+    assert(metadata:match('"hasRibbonIcon"%s*:%s*true'), "XBB must appear in the native Plugins window")
     assert(not metadata:match('"requiredPermissions"%s*:'), "XBB does not request permissions")
+end)
+
+test("the native Plugins tab launches one floating settings window without a HUD link", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local parent = app.components.TOPLEVEL_V2__GAME_AREA
+    dofile("main.lua")
+    PluginLogic({ logicTick = 0 })
+    equal(Mock.find(parent, "Settings"), nil)
+    local host = Mock.node()
+    app.events.ContentLayerReady.xbb({ component = host })
+    assert(Mock.find(host, "XBB"))
+    assert(Mock.find(host, "Quick options"))
+    equal(Mock.find(host, "Quick display options. Use full settings to manage effects, pins, and missing warnings."), nil)
+    assert(not Mock.find(parent, "Open full settings"))
+    Mock.click(host, "Open full settings")
+    local title = assert(Mock.find(parent, "XBB / Xijie Buff Bars"))
+    Mock.click(host, "Open full settings")
+    equal(Mock.find(parent, "XBB / Xijie Buff Bars"), title)
+    PluginShutdown()
+    equal(host.destroyed, nil)
+    equal(next(app.events.ContentLayerReady), nil)
+end)
+
+test("opening settings before the first logic tick does not destroy the new window", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    dofile("main.lua")
+    local host = Mock.node()
+    app.events.SettingsLayerReady.xbb({ component = host })
+    Mock.click(host, "Open full settings")
+    local title = assert(Mock.find(app.components.TOPLEVEL_V2__GAME_AREA, "XBB / Xijie Buff Bars"))
+    PluginLogic({ logicTick = 0 })
+    equal(title.destroyed, nil)
+    PluginShutdown()
+end)
+
+test("Plugins and settings launchers synchronize quick controls and reject failed changes", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    dofile("main.lua")
+    PluginLogic({ logicTick = 0 })
+    local content, settingsHost = Mock.node(), Mock.node()
+    app.events.ContentLayerReady.xbb({ component = content })
+    app.events.SettingsLayerReady.xbb({ component = settingsHost })
+    Mock.click(content, "Separate buff/debuff stacks")
+    equal(app.db.values.settings.separate, true)
+    local writes = app.db.writes
+    PluginLogic({ logicTick = 1 })
+    equal(app.db.writes, writes)
+    Mock.click(settingsHost, "Separate buff/debuff stacks")
+    equal(app.db.values.settings.separate, false)
+    Mock.click(content, "Replace original bars")
+    app.events.Draw.xbb({})
+    equal(app.components.BUFF_BAR__BUFF_RENDER_LAYER.alpha, 255)
+    Mock.click(content, "Lock bar dragging")
+    equal(app.db.values.settings.dragLocked, true)
+    local save = app.db.Set
+    app.db.Set = function() return false end
+    Mock.click(content, "Lock bar dragging")
+    equal(app.db.values.settings.dragLocked, true)
+    equal(#app.warnings, 1)
+    app.db.Set = save
+    Mock.click(content, "Lock bar dragging")
+    equal(app.db.values.settings.dragLocked, false)
+    content:SetSize(320, 240)
+    PluginLogic({ logicTick = 2 })
+    equal(content.children[1].width, 320)
+    equal(content.children[1].height, 240)
+    app.availability(false)
+    PluginLogic({ logicTick = 3 })
+    equal(Mock.find(content, "Open full settings").enabled, false)
+    PluginShutdown()
+    equal(content.destroyed, nil)
+    equal(settingsHost.destroyed, nil)
 end)
 
 local function fixture()
@@ -43,6 +121,212 @@ local function fixture()
     return Reader.new(api), components, slot, types, api
 end
 
+test("HUD colors follow category defaults and stable overrides in either layout", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local settings = require("xbb/settings").new(app.db, error)
+    local model = require("xbb/model").new()
+    local hud = require("xbb/hud").new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+    local buff = { key = "buff:test", name = "Test", kind = "buff", timing = "timed", remaining = 20 }
+    local debuff = { key = "debuff:test", name = "Test CD", kind = "debuff", timing = "timed", remaining = 10 }
+    settings:setDefaultColor("buff", 0x00AAFFFF)
+    settings:setDefaultColor("debuff", 0xFFAA00CC)
+    settings:setDefaultColor("missing", 0xAA00FFDD)
+    settings:setColor(buff, 0x12345678)
+    settings:enablePreset("overload", true)
+    settings:pin(buff, 4, true)
+    local function color(key)
+        for _, row in ipairs(hud.rows) do if row.effect.key == key then return row.fill.rgba end end
+        error("missing HUD row: " .. key)
+    end
+    for _, separate in ipairs({ false, true }) do
+        settings:set("separate", separate)
+        model:update({ buff, debuff }, 0)
+        hud:render(model:view(settings.data, 0))
+        equal(color(buff.key), 0x12345678)
+        equal(color(debuff.key), 0xFFAA00CC)
+        equal(color("missing:overload"), 0xAA00FFDD)
+        hud:updateCountdowns(model.effects, 1)
+        equal(color(buff.key), 0x12345678)
+        model:update({ debuff }, 2)
+        hud:render(model:view(settings.data, 2))
+        equal(color(buff.key), 0x12345678)
+        settings:resetColor(buff.key)
+        hud:render(model:view(settings.data, 2))
+        equal(color(buff.key), 0x00AAFFFF)
+        settings:setColor(buff, 0x12345678)
+    end
+    hud:destroy()
+end)
+
+test("Colors and Observed edit buff or debuff colors and retain picker drafts during refresh", function()
+    for _, kind in ipairs({ "buff", "debuff" }) do
+        local Mock = require("tests/mock")
+        local app = Mock.install()
+        local settings = require("xbb/settings").new(app.db, error)
+        local View = require("xbb/settings_ui")
+        local entry = { key = kind .. ":test", name = "Test effect", kind = kind }
+        settings:remember({ entry })
+        local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+        local root = view.root
+        view.group:SetActive(5)
+        Mock.click(root, "Custom color")
+        equal(view.tab, "Observed")
+        equal(view.group:GetActiveIndex(), 5)
+        equal(view.colorKey, entry.key)
+        equal(view.root, root)
+        equal(#view.colorPickers, 1)
+        local picker = view.colorPickers[1]
+        equal(picker.options.showAlpha, true)
+        picker:Open()
+        picker.pendingColour = 0xABCDEF01
+        local group = view.group
+        entry.tooltip = "Updated native details"
+        settings:remember({ entry })
+        view:refresh()
+        equal(view.group, group)
+        equal(picker.root.destroyed, nil)
+        picker:Close()
+        view:refresh()
+        equal(settings.data.colors[entry.key], nil)
+        Mock.click(root, "Custom color")
+        picker = view.colorPickers[1]
+        picker:Open()
+        picker:SetValue(0xABCDEF01)
+        picker:Close()
+        view:refresh()
+        equal(settings:colorFor(entry), 0xABCDEF01)
+        equal(view.tab, "Observed")
+        equal(view.colorKey, entry.key)
+        local loaded = require("xbb/settings").new(app.db, error)
+        equal(loaded:colorFor(entry), 0xABCDEF01)
+        view.group:SetActive(5)
+        Mock.click(root, "Reset color")
+        equal(view.tab, "Observed")
+        equal(settings.data.colors[entry.key], nil)
+        equal(settings:colorFor(entry), kind == "buff" and 0x357E89DD or 0x965565DD)
+        view.group:SetActive(6)
+        local defaultPicker = view.colorPickers[1]
+        defaultPicker:SetValue(0xFF000055)
+        view:refresh()
+        equal(settings:colorFor({ kind = "buff" }), 0xFF000055)
+        Mock.click(root, "Reset")
+        equal(settings:colorFor({ kind = "buff" }), 0x357E89DD)
+        view:destroy()
+    end
+end)
+
+test("failed color saves restore picker values and settings teardown closes popups", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local settings = require("xbb/settings").new(app.db, warn)
+    local View = require("xbb/settings_ui")
+    local entry = { key = "buff:test", name = "Test", kind = "buff" }
+    settings:remember({ entry })
+    local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+    view.group:SetActive(5)
+    Mock.click(view.root, "Custom color")
+    local data, picker = settings.data, view.colorPickers[1]
+    app.db.Set = function() return false end
+    picker:Open()
+    picker:SetValue(0x123456FF)
+    equal(picker:GetValue(), 0x357E89DD)
+    equal(settings.data, data)
+    equal(#app.warnings, 1)
+    local popup = picker.pickerWindow.root
+    view.window:Close()
+    equal(popup.destroyed, true)
+    equal(picker.pickerWindow, nil)
+    view:show()
+    picker:Open()
+    popup = picker.pickerWindow.root
+    view.group:SetActive(1)
+    equal(popup.destroyed, true)
+    view.group:SetActive(6)
+    picker = view.colorPickers[1]
+    picker:Open()
+    popup = picker.pickerWindow.root
+    app.components.TOPLEVEL_V2__GAME_AREA:SetSize(900, 700)
+    view:refresh()
+    equal(popup.destroyed, true)
+    view.colorPickers[1]:Open()
+    popup = view.colorPickers[1].pickerWindow.root
+    view:destroy()
+    equal(popup.destroyed, true)
+end)
+
+test("Colors lists only assigned overrides and Reset removes the row and restores its default", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local settings = require("xbb/settings").new(app.db, error)
+    local entries = {}
+    for index = 1, 18 do
+        entries[index] = { key = "buff:" .. index, name = string.format("Effect %02d", index), kind = "buff" }
+    end
+    settings:remember(entries)
+    settings:setColor(entries[1], 0x12345678)
+    local view = require("xbb/settings_ui").new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+    view.group:SetActive(6)
+    equal(Mock.find(view.root, "Edit"), nil)
+    equal(Mock.find(view.root, "Use default"), nil)
+    equal(Mock.find(view.root, "Default"), nil)
+    equal(Mock.find(view.root, "Custom"), nil)
+    equal(Mock.find(view.root, "Effect 02 (Buff)"), nil)
+    equal(#view.colorPickers, 4)
+    equal(view.colorPickers[4]:GetValue(), 0x12345678)
+    view.group:SetActive(5)
+    Mock.click(view.root, "Custom color")
+    equal(view.tab, "Observed")
+    equal(view.colorKey, entries[2].key)
+    view.colorPickers[1]:SetValue(0xAABBCCDD)
+    view.colorPickers[1]:Close()
+    view:refresh()
+    equal(settings:colorFor(entries[1]), 0x12345678)
+    equal(settings:colorFor(entries[2]), 0xAABBCCDD)
+    view.group:SetActive(6)
+    equal(#view.colorPickers, 5)
+    local resets = {}
+    for _, child in ipairs(view.group:GetPage(6).content.children) do
+        if child.label == "Reset" then resets[#resets + 1] = child end
+    end
+    resets[5].hooks[ui.Hook.ONCLICK]()
+    equal(settings.data.colors[entries[2].key], nil)
+    equal(settings:colorFor(entries[1]), 0x12345678)
+    equal(Mock.find(view.root, "Effect 02 (Buff)"), nil)
+    equal(#view.colorPickers, 4)
+    settings:resetColor(entries[1].key)
+    view:refresh()
+    equal(#view.colorPickers, 3)
+    assert(Mock.find(view.root, "No custom colors yet."))
+    for index = 1, 13 do settings:setColor(entries[index], 0xAABBCCDD) end
+    view:refresh()
+    Mock.click(view.root, "Next")
+    Mock.click(view.root, "Next")
+    equal(view.page, 3)
+    resets = {}
+    for _, child in ipairs(view.group:GetPage(6).content.children) do
+        if child.label == "Reset" then resets[#resets + 1] = child end
+    end
+    resets[4].hooks[ui.Hook.ONCLICK]()
+    equal(view.page, 2)
+    equal(settings.data.colors[entries[13].key], nil)
+    view.group:SetActive(5)
+    while not Mock.find(view.root, "Effect 18") do Mock.click(view.root, "Next") end
+    local buttons = {}
+    for _, child in ipairs(view.group:GetPage(5).content.children) do
+        if child.label == "Custom color" then buttons[#buttons + 1] = child end
+    end
+    buttons[#buttons].hooks[ui.Hook.ONCLICK]()
+    equal(view.tab, "Observed")
+    equal(view.colorKey, entries[18].key)
+    assert(view.page > 1, "opening a picker must retain the selected Observed page")
+    assert(view.colorPickers[1].pickerWindow)
+    view.colorPickers[1]:Close()
+    view.group:SetActive(6)
+    equal(Mock.find(view.root, "Effect 18 (Buff)"), nil)
+    view:destroy()
+end)
+
 test("native source reads both bars and stable names without icon matching", function()
     local reader, _, slot, types = fixture()
     slot("BUFF_BAR", 1, "<col=ffffff>Overload</col>", {
@@ -65,6 +349,219 @@ test("typed native progress preserves exact remaining and total seconds", functi
     local data = assert(reader:scan())
     equal(data[1].remaining, 342)
     equal(data[1].total, 360)
+end)
+
+test("timer parsing retains the precision of the displayed units", function()
+    for _, sample in ipairs({
+        { "2m", 120, 60 }, { "1m", 60, 60 }, { "1h", 3600, 3600 },
+        { "1h 2m", 3720, 60 }, { "1h 2m 3s", 3723, 1 },
+        { "1:02:03", 3723, 1 }, { "1:02", 62, 1 },
+        { "59s", 59, 1 }, { "12.6s", 12.6, 0.1 }, { "12.6", 12.6, 0.1 },
+    }) do
+        local duration, precision = Reader.parseTime(sample[1], true)
+        equal(duration, sample[2])
+        equal(precision, sample[3])
+    end
+end)
+
+test("minute-rounded potion labels preserve fill until precise seconds reconcile timing", function()
+    for _, fullDuration in ipairs({ 120, 180 }) do
+        local Mock = require("tests/mock")
+        local app = Mock.install()
+        local Settings, Model, Hud = require("xbb/settings"), require("xbb/model"), require("xbb/hud")
+        local reader, _, slot, types, api = fixture()
+        api.paramID = function(name) return name end
+        local node = slot("DEBUFF_BAR", 1, "Adrenaline potion cooldown", {})
+        node.paramsConfig = { valid = true, Get = function(_, name)
+            if name == "COMBATV2_BUFF_USES_ABILITY_END" then return 1 end
+        end }
+        local settings, model = Settings.new(app.db, error), Model.new()
+        local hud = Hud.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+        local function sample(now)
+            local snapshot = assert(reader:scan())
+            model:update(snapshot, now)
+            settings:remember(snapshot, model.durations)
+            hud:render(model:view(settings.data, now))
+            hud:updateCountdowns(model.effects, now)
+            return snapshot[1]
+        end
+        sample(100)
+        local label = { visible = true, type = types.LABEL, content = (fullDuration // 60) .. "m" }
+        node.children = { label }
+        local first = sample(100.6)
+        equal(first.timerPrecision, 60)
+        equal(first.total, nil)
+        sample(101.2)
+        label.content = (fullDuration // 60 - 1) .. "m"
+        sample(101.8)
+        assert(hud.rows[1].fill.width > settings.data.width * 0.97)
+        equal(hud.rows[1].timer.content, Model.formatTime(fullDuration))
+        assert(math.abs(settings.data.known[first.key].duration - (fullDuration + 1.8)) < 0.000001)
+        if fullDuration == 180 then
+            sample(161.2)
+            label.content = "1m"
+            sample(161.8)
+            equal(hud.rows[1].timer.content, "2:00")
+        end
+        local preciseAt = fullDuration + 42.4
+        label.content = "59s"
+        sample(preciseAt)
+        local duration = preciseAt - 100 + 59
+        equal(hud.rows[1].timer.content, "59s")
+        equal(hud.rows[1].fill.width, math.floor(settings.data.width * 59 / duration))
+        assert(math.abs(settings.data.known[first.key].duration - duration) < 0.000001)
+        label.content = "0s"
+        sample(preciseAt + 59)
+        equal(hud.rows[1].fill.width, 0)
+        equal(hud.rows[1].timer.content, "0.0s")
+        hud:destroy()
+    end
+end)
+
+test("a first minute label uses saved duration and calibration clears the HUD estimate marker", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local Settings, Model, Hud = require("xbb/settings"), require("xbb/model"), require("xbb/hud")
+    local reader, _, slot, types, api = fixture()
+    api.paramID = function(name) return name end
+    local label = { visible = true, type = types.LABEL, content = "2m" }
+    local node = slot("DEBUFF_BAR", 1, "Adrenaline potion cooldown", { label })
+    node.paramsConfig = { valid = true, Get = function(_, name)
+        if name == "COMBATV2_BUFF_STRUCT" then return 11599 end
+    end }
+    local settings = Settings.new(app.db, error)
+    settings:remember({ { key = "debuff:11599", kind = "debuff", name = "Adrenaline potion cooldown" } },
+        { ["debuff:11599"] = 120 })
+    settings = Settings.new(app.db, error)
+    local model = Model.new(settings.data.known)
+    local hud = Hud.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+    local function sample(now)
+        model:update(assert(reader:scan()), now)
+        hud:render(model:view(settings.data, now))
+        hud:updateCountdowns(model.effects, now)
+    end
+    sample(100)
+    equal(hud.rows[1].timer.content, "~2:00")
+    equal(hud.rows[1].fill.width, settings.data.width)
+    label.content = "1m"
+    sample(100.6)
+    equal(hud.rows[1].timer.content, "2:00")
+    sample(101.2)
+    equal(hud.rows[1].timer.content:sub(1, 1) == "~", false)
+    node.paramsConfig.Get = function(_, name)
+        if name == "COMBATV2_BUFF_STRUCT" then return 11599 end
+        if name == "COMBATV2_BUFF_USES_STACKS" then return 0 end
+    end
+    label.content = "60"
+    sample(160.6)
+    equal(hud.rows[1].timer.content, "1:00")
+    label.content = "59"
+    sample(161.8)
+    equal(hud.rows[1].timer.content, "59s")
+    hud:destroy()
+end)
+
+test("precise native sources take precedence over rounded minute labels", function()
+    for _, source in ipairs({ "radial", "book" }) do
+        local reader, _, slot, types, api = fixture()
+        api.paramID = function(name) return name end
+        local node = slot("BUFF_BAR", 1, "Pocket book", {
+            { visible = true, type = types.LABEL, content = "2m" },
+        })
+        if source == "radial" then
+            node.children[#node.children + 1] = { visible = true, type = types.RADIAL_PROGRESS_OVERLAY,
+                initialValue = 0, curValue = 61, endValue = 120 }
+        else
+            node.paramsConfig = { valid = true, Get = function(_, name)
+                if name == "COMBATV2_BUFF_STRUCT" then return 21215 end
+            end }
+            api.struct = function() return { configName = "COMBATV2_GOD_BOOK_TIMER_DUMMY_ABILITY",
+                GetParamValue = function() return nil end } end
+            api.pocketBook = function() return { remaining = 59 } end
+        end
+        local item = assert(reader:scan())[1]
+        equal(item.remaining, 59)
+        equal(item.timerPrecision, nil)
+    end
+end)
+
+test("the most precise timer label wins regardless of component order", function()
+    for _, labels in ipairs({ { "2m", "1:03" }, { "1:03", "2m" } }) do
+        local reader, _, slot, types = fixture()
+        local children = {}
+        for _, label in ipairs(labels) do
+            children[#children + 1] = { visible = true, type = types.LABEL, content = label }
+        end
+        slot("BUFF_BAR", 1, "Timed buff", children)
+        local item = assert(reader:scan())[1]
+        equal(item.remaining, 63)
+        equal(item.timerPrecision, 1)
+    end
+end)
+
+test("the plugin persists learned durations and uses them for pending timers after reload", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local parent = app.components.TOPLEVEL_V2__GAME_AREA
+    local node = Mock.node(nil, ui.ComponentType.LAYER)
+    node.opConfig = { opBaseName = "Channeled Might" }
+    node.paramsConfig = { valid = true, Get = function(_, name)
+        if name == "COMBATV2_BUFF_STRUCT" then return 123 end
+        if name == "COMBATV2_BUFF_USES_ABILITY_END" then return 1 end
+    end }
+    app.components.BUFF_BAR__BUFF_1 = node
+    local label = Mock.node(node, ui.ComponentType.LABEL)
+    label.content = "10s"
+    dofile("main.lua")
+    PluginLogic({ logicTick = 0 })
+    equal(app.db.values.settings.known["buff:123"].duration, 10)
+    PluginShutdown()
+    label.visible = false
+    dofile("main.lua")
+    PluginLogic({ logicTick = 1000 })
+    assert(Mock.find(parent, "~10s"))
+    local writes = app.db.writes
+    PluginLogic({ logicTick = 1010 })
+    app.events.ServerLogic.xbb()
+    equal(app.db.writes, writes)
+    label.content, label.visible = "8s", true
+    PluginLogic({ logicTick = 1030 })
+    app.events.ServerLogic.xbb()
+    PluginLogic({ logicTick = 1035 })
+    assert(Mock.find(parent, "7.9s"))
+    assert(math.abs(app.db.values.settings.known["buff:123"].duration - 8.6) < 0.000001)
+    PluginShutdown()
+end)
+
+test("a late potion cooldown fills from observed time rather than a longer native range", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local Settings = require("xbb/settings")
+    local Model = require("xbb/model")
+    local Hud = require("xbb/hud")
+    local reader, _, slot, types, api = fixture()
+    api.paramID = function(name) return name end
+    local node = slot("DEBUFF_BAR", 1, "Adrenaline potion cooldown", {})
+    node.paramsConfig = { valid = true, Get = function(_, name)
+        if name == "COMBATV2_BUFF_USES_ABILITY_END" then return 1 end
+    end }
+    local settings, model = Settings.new(app.db, error), Model.new()
+    local hud = Hud.new(app.components.TOPLEVEL_V2__GAME_AREA, settings, function() end)
+    model:update(assert(reader:scan()), 100)
+    hud:render(model:view(settings.data, 100))
+    equal(hud.rows[1].timer.content, "")
+    equal(hud.rows[1].fill.width, settings.data.width)
+    node.children = { { visible = true, type = types.RADIAL_PROGRESS_OVERLAY,
+        initialValue = 0, curValue = 60, endValue = 120 } }
+    local snapshot = assert(reader:scan())
+    equal(snapshot[1].remaining, 60)
+    equal(snapshot[1].total, 120)
+    model:update(snapshot, 100.6)
+    hud:render(model:view(settings.data, 100.6))
+    hud:updateCountdowns(model.effects, 100.6)
+    equal(hud.rows[1].timer.content, "1:00")
+    equal(hud.rows[1].fill.width, math.floor(settings.data.width * 60 / 60.6))
+    hud:destroy()
 end)
 
 test("stack counters are not interpreted as seconds", function()
@@ -102,6 +599,122 @@ test("timer and stack labels are independent of component order", function()
         equal(item.timing, timed and "timed" or "untimed")
         equal(item.remaining, timed and 5 or nil)
     end
+end)
+
+test("combined native timer and parenthesized stack labels retain both values", function()
+    for _, sample in ipairs({
+        { "20<br>(12)", 20, 12, 1, false },
+        { "19<BR />(5)", 19, 5, 1, false },
+        { "<col=ffffff>9.6</col><br>(0)", 9.6, 0, 0.1, false },
+        { "0<br>(0)", 0, 0, 1, false },
+        { "1m<br>(12%)", 60, 12, 60, true },
+    }) do
+        local reader, _, slot, types, api = fixture()
+        api.paramID = function(name) return name end
+        api.struct = function()
+            return { GetParamValue = function(_, name)
+                if name == "COMBATV2_BUFF_USES_STACKS" or name == "COMBATV2_BUFF_USES_ABILITY_END" then return true end
+            end }
+        end
+        local node = slot("BUFF_BAR", 1, "Stacked buff", {
+            { visible = true, type = types.LABEL, content = sample[1] },
+        })
+        node.paramsConfig = { valid = true, Get = function(_, name)
+            if name == "COMBATV2_BUFF_STRUCT" then return 123 end
+        end }
+        local item = assert(reader:scan())[1]
+        equal(item.timing, "timed")
+        equal(item.remaining, sample[2])
+        equal(item.stacks, sample[3])
+        equal(item.timerPrecision, sample[4])
+        equal(item.stacksPercent, sample[5])
+    end
+end)
+
+test("stack effects with an end flag remain pending until timing is readable", function()
+    for _, flag in ipairs({ true, 1 }) do
+        local reader, _, slot, types, api = fixture()
+        api.paramID = function(name) return name end
+        local node = slot("BUFF_BAR", 1, "Stacked buff")
+        node.paramsConfig = { valid = true, Get = function(_, name)
+            if name == "COMBATV2_BUFF_USES_STACKS" or name == "COMBATV2_BUFF_USES_ABILITY_END" then return flag end
+        end }
+        for _, text in ipairs({ "", "12", "(12)" }) do
+            node.children = { { visible = true, type = types.LABEL, content = text } }
+            local item = assert(reader:scan())[1]
+            equal(item.timing, "unknown")
+            equal(item.remaining, nil)
+            equal(item.stacks, text ~= "" and 12 or nil)
+        end
+    end
+end)
+
+test("combined bare timers require stack and end metadata", function()
+    for _, sample in ipairs({
+        { stacks = true, ends = false, count = 12, timing = "untimed" },
+        { stacks = false, ends = true, timing = "unknown" },
+        { ends = true, timing = "unknown" },
+    }) do
+        local reader, _, slot, types, api = fixture()
+        api.paramID = function(name) return name end
+        local node = slot("BUFF_BAR", 1, "Native effect", {
+            { visible = true, type = types.LABEL, content = "20<br>(12)" },
+        })
+        node.paramsConfig = { valid = true, Get = function(_, name)
+            if name == "COMBATV2_BUFF_USES_STACKS" then return sample.stacks end
+            if name == "COMBATV2_BUFF_USES_ABILITY_END" then return sample.ends end
+        end }
+        local item = assert(reader:scan())[1]
+        equal(item.timing, sample.timing)
+        equal(item.remaining, nil)
+        equal(item.stacks, sample.count)
+    end
+end)
+
+test("live Blood Tithe and Glacial Embrace labels reach HUD counts timers and refreshes", function()
+    local Mock = require("tests/mock")
+    local app = Mock.install()
+    local Settings, Model, Hud = require("xbb/settings"), require("xbb/model"), require("xbb/hud")
+    local reader, _, slot, types, api = fixture()
+    api.paramID = function(name) return name end
+    api.struct = function(structID)
+        return { configName = structID == 44820 and "COMBATV2_BUFF_BLOOD_TITHE" or "COMBATV2_BUFF_GLACIAL_EMBRACE",
+            GetParamValue = function(_, name)
+                if name == "COMBATV2_BUFF_USES_STACKS" or name == "COMBATV2_BUFF_USES_ABILITY_END" then return true end
+            end }
+    end
+    local nodes = {}
+    for index, entry in ipairs({ { 44820, "Blood Tithe" }, { 44066, "Glacial Embrace" } }) do
+        local node = slot("BUFF_BAR", index, entry[2])
+        node.paramsConfig = { valid = true, Get = function(_, name)
+            if name == "COMBATV2_BUFF_STRUCT" then return entry[1] end
+        end }
+        nodes[index] = node
+    end
+    local settings, model = Settings.new(app.db, error), Model.new()
+    local hud = Hud.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
+    model:update(assert(reader:scan()), 100)
+    hud:render(model:view(settings.data, 100))
+    equal(hud.rows[1].timer.content, "")
+    equal(hud.rows[2].timer.content, "")
+    nodes[1].children = { { visible = true, type = types.LABEL, content = "20<br>(12)" } }
+    nodes[2].children = { { visible = true, type = types.LABEL, content = "20<br>(1)" } }
+    model:update(assert(reader:scan()), 100.6)
+    hud:render(model:view(settings.data, 100.6))
+    equal(hud.rows[1].name.content, "12 Blood Tithe")
+    equal(hud.rows[2].name.content, "1 Glacial Embrace")
+    equal(hud.rows[1].timer.content, "20s")
+    equal(hud.rows[2].timer.content, "20s")
+    equal(hud.rows[1].fill.width, math.floor(settings.data.width * 20 / 20.6))
+    nodes[1].children[1].content = "18<br>(12)"
+    nodes[2].children[1].content = "20<br>(3)"
+    model:update(assert(reader:scan()), 103)
+    hud:render(model:view(settings.data, 103))
+    equal(hud.rows[1].name.content, "3 Glacial Embrace")
+    equal(hud.rows[1].timer.content, "20s")
+    equal(model.effects["buff:44066"].remaining, 20)
+    equal(select(1, Model.countdown(model.effects["buff:44066"], 103)), 20)
+    hud:destroy()
 end)
 
 test("stack radial values remain counts rather than seconds", function()
@@ -404,6 +1017,12 @@ test("short native titles expose ability-info and scripted hover descriptions", 
             "6.6% chance to increase damage dealt by 20% and damage taken by 10% for 15 seconds." },
         { 52801, "COMBATV2_BUFF_RANGED_SEARING_WINDS", "Searing Winds", nil,
             "Ranged attacks deal an additional 20% bonus damage with each hit." },
+        { 44820, "COMBATV2_BUFF_BLOOD_TITHE", "Blood Tithe", nil,
+            "Each stack boosts basic Magic ability base damage by 1% (maximum 12 stacks)." },
+        { 44066, "COMBATV2_BUFF_GLACIAL_EMBRACE", "Glacial Embrace", nil,
+            "Each stack cuts Tsunami's adrenaline cost by 12% (maximum 5 stacks).\n"
+                .. "At 5 stacks, Incite Fear attacks can trigger Frost Surge for 10-50% ability damage "
+                .. "to the target and up to 8 enemies within 2 tiles (12s cooldown)." },
     }) do
         local Mock = require("tests/mock")
         local app = Mock.install()
@@ -433,6 +1052,32 @@ test("short native titles expose ability-info and scripted hover descriptions", 
         hud:updateTooltip()
         equal(hud.tooltip.text.content, (item.tooltip:gsub("\n", "<br>")))
         hud:destroy()
+    end
+end)
+
+test("scripted stack descriptions never replace supplied native hover or ability info", function()
+    for _, entry in ipairs({
+        { 44820, "COMBATV2_BUFF_BLOOD_TITHE", "Blood Tithe" },
+        { 44066, "COMBATV2_BUFF_GLACIAL_EMBRACE", "Glacial Embrace" },
+    }) do
+        local reader, _, slot, _, api = fixture()
+        api.paramID = function(name) return name end
+        local info = "Current native ability details."
+        api.struct = function()
+            return { configName = entry[2], GetParamValue = function(_, name)
+                if name == "COMBATV2_ABILITY_NAME" then return entry[3] end
+                if name == "COMBATV2_ABILITY_INFO" then return info end
+            end }
+        end
+        local node = slot("BUFF_BAR", 1, entry[3])
+        node.paramsConfig = { valid = true, Get = function(_, name)
+            if name == "COMBATV2_BUFF_STRUCT" then return entry[1] end
+        end }
+        equal(assert(reader:scan())[1].tooltip, entry[3] .. "\n" .. info)
+        node.opConfig.opBaseName = entry[3] .. ":<br>Current native hover details."
+        equal(assert(reader:scan())[1].tooltip, entry[3] .. ":\nCurrent native hover details.")
+        info = nil
+        equal(assert(reader:scan())[1].tooltip, entry[3] .. ":\nCurrent native hover details.")
     end
 end)
 
@@ -1103,10 +1748,11 @@ test("stack headers combine the plugin name and categories without a second labe
     hud:render({})
     equal(hud.stacks.buff.heading.content, "XBB / Buffs")
     equal(hud.stacks.debuff.heading.content, "XBB / Debuffs")
-    assert(Mock.find(hud.stacks.buff.root, "Settings"))
+    equal(Mock.find(hud.stacks.buff.root, "Settings"), nil)
     equal(Mock.find(hud.stacks.debuff.root, "Settings"), nil)
     equal(hud.stacks.debuff.settingsButton, nil)
     equal(hud.stacks.debuff.heading.width, settings.data.width)
+    equal(hud.stacks.buff.heading.width, settings.data.width)
     for _, stack in pairs(hud.stacks) do
         equal(stack.status.hidden, true)
         equal(stack.body.y, 30)
@@ -1173,7 +1819,7 @@ test("separate stacks retain independent positions and dragging can be locked", 
     equal(hud.stacks.debuff.root.destroyed, true)
 end)
 
-test("native settings layout uses integer coordinates on even and odd viewports", function()
+test("PrettyUI settings use integer placement and retain every settings tab", function()
     local Mock = require("tests/mock")
     local Settings = require("xbb/settings")
     local View = require("xbb/settings_ui")
@@ -1185,67 +1831,14 @@ test("native settings layout uses integer coordinates on even and odd viewports"
         for _, tab in ipairs({ "Hidden", "Pins", "Missing", "Observed", "Display" }) do
             view.tab = tab
             view:render()
-            assert(Mock.find(view.root, "XBB / Xijie Buff Bars / " .. tab))
+            assert(Mock.find(view.root, "XBB / Xijie Buff Bars"))
+            equal(view.group:GetActiveIndex(), ({ Hidden = 2, Pins = 3, Missing = 4, Observed = 5, Display = 1 })[tab])
         end
         view:destroy()
     end
 end)
 
-local function settingsPointer(app, view, x, y, offsetX, offsetY)
-    local scale = game.options.InterfaceScale.setting / 100
-    local origin = view.parent.xyGlobal
-    app.input.position = { x = (origin.x + x + (offsetX or 20)) * scale,
-        y = (origin.y + y + (offsetY or 14)) * scale }
-end
-
-local function pressSettings(app, view)
-    local title = assert(view.title, "settings title must be draggable")
-    equal(title.enabled, true)
-    equal(title.hooks[ui.Hook.ONDRAG], nil)
-    equal(title.hooks[ui.Hook.ONDRAGCOMPLETE], nil)
-    assert(title.hooks[ui.Hook.ONHOLD])
-    equal(title.clickthrough, false)
-    settingsPointer(app, view, view.root.x, view.root.y)
-    title.hooks[ui.Hook.ONCLICK](title, 20, 14)
-    return title
-end
-
-local function dropSettings(title)
-    title.hooks[ui.Hook.ONRELEASE](title, 20, 14)
-end
-
-test("settings title text uses press hold and release to move the entire window", function()
-    local Mock = require("tests/mock")
-    local app = Mock.install()
-    local Settings = require("xbb/settings")
-    local View = require("xbb/settings_ui")
-    local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, Settings.new(app.db, error))
-    local title = Mock.find(view.root, "XBB / Xijie Buff Bars / Display")
-    assert(title.hooks[ui.Hook.ONCLICK], "the visible title must handle the press")
-    assert(title.hooks[ui.Hook.ONHOLD], "the visible title must handle holding")
-    assert(title.hooks[ui.Hook.ONRELEASE], "the visible title must handle release")
-    settingsPointer(app, view, view.root.x, view.root.y)
-    title.hooks[ui.Hook.ONCLICK](title, 20, 14)
-    settingsPointer(app, view, 122, 122)
-    title.hooks[ui.Hook.ONHOLD](title, 20, 14)
-    equal(view.root.x, 120)
-    equal(view.root.y, 120)
-    settingsPointer(app, view, 180, 210)
-    title.hooks[ui.Hook.ONHOLD](title, 20, 14)
-    equal(view.root.x, 180)
-    equal(view.root.y, 210)
-    equal(app.db.writes, 0)
-    title.hooks[ui.Hook.ONRELEASE](title, 20, 14)
-    equal(view.drag, nil)
-    equal(app.db.values.settings.settingsWindowPosition.x, 180)
-    settingsPointer(app, view, 32, 30)
-    view:refresh()
-    equal(view.root.x, 180)
-    equal(view.root.y, 210)
-    view:destroy()
-end)
-
-test("settings title uses held left dragging and persists independently of bar lock", function()
+test("PrettyUI placement survives redraw close and reload independently of bar lock", function()
     local Mock = require("tests/mock")
     local app = Mock.install()
     local Settings = require("xbb/settings")
@@ -1256,29 +1849,25 @@ test("settings title uses held left dragging and persists independently of bar l
     local view = View.new(parent, settings)
     equal(view.root.x, 120)
     equal(view.root.y, 120)
-    equal(Mock.find(view.root, "XBB / Xijie Buff Bars / Display").parent, view.root)
     local writes = app.db.writes
-    local title = pressSettings(app, view)
-    title.hooks[ui.Hook.ONRELEASE](title, 20, 14)
+    view.window:Close()
     equal(app.db.writes, writes)
     equal(settings.data.settingsWindowPosition, nil)
-    title = pressSettings(app, view)
-    settingsPointer(app, view, 180, 210)
+    view:show()
+    local root, window = view.root, view.window
+    view.root:SetPos(180, 210)
     view:refresh()
-    equal(view.root.x, 180)
-    equal(view.root.y, 210)
     equal(app.db.writes, writes)
-    assert(view.drag)
-    title.hooks[ui.Hook.ONRELEASE](title, 80, 104)
-    equal(view.drag, nil)
+    Mock.click(view.root, "Pins")
+    equal(view.root, root)
+    equal(view.window, window)
     equal(view.root.x, 180)
     equal(view.root.y, 210)
     equal(settings.data.x, 32)
     equal(settings.data.dragLocked, true)
+    view.window:Close()
     equal(app.db.writes, writes + 1)
-    assert(not Mock.find(view.root, "Close").hooks[ui.Hook.ONCLICK])
-    assert(not Mock.find(view.root, "Pins").hooks[ui.Hook.ONCLICK])
-    Mock.find(view.root, "Pins").hooks[ui.Hook.ONBUTTONPRESSED]()
+    view:show()
     equal(view.root.x, 180)
     view:destroy()
     local reopened = View.new(parent, Settings.new(app.db, error))
@@ -1287,48 +1876,7 @@ test("settings title uses held left dragging and persists independently of bar l
     reopened:destroy()
 end)
 
-test("destroyed settings titles cannot finish or restart another drag", function()
-    local Mock = require("tests/mock")
-    local app = Mock.install()
-    local Settings = require("xbb/settings")
-    local View = require("xbb/settings_ui")
-    local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, Settings.new(app.db, error))
-    local old = pressSettings(app, view)
-    settingsPointer(app, view, 180, 210)
-    view:refresh()
-    dropSettings(old)
-    local title = pressSettings(app, view)
-    old.hooks[ui.Hook.ONRELEASE](old, 20, 14)
-    assert(view.drag, "a destroyed title must not finish the current drag")
-    dropSettings(title)
-    equal(app.db.writes, 1)
-    view:destroy()
-    title.hooks[ui.Hook.ONCLICK](title, 20, 14)
-    equal(view.drag, nil)
-end)
-
-test("settings window moves outside its original bounds before the mouse is released", function()
-    local Mock = require("tests/mock")
-    local app = Mock.install()
-    local Settings = require("xbb/settings")
-    local View = require("xbb/settings_ui")
-    local parent = app.components.TOPLEVEL_V2__GAME_AREA
-    parent:SetSize(4096, 2160)
-    local view = View.new(parent, Settings.new(app.db, error))
-    equal(view.root.x, 1668)
-    local title = pressSettings(app, view)
-    settingsPointer(app, view, 32, 1500)
-    view:refresh()
-    equal(view.root.x, 32)
-    equal(view.root.y, 1500)
-    equal(app.db.writes, 0)
-    dropSettings(title)
-    equal(app.db.values.settings.settingsWindowPosition.x, 32)
-    equal(app.db.values.settings.settingsWindowPosition.y, 1500)
-    view:destroy()
-end)
-
-test("settings dragging converts scale and origin and clamps resized odd viewports", function()
+test("saved PrettyUI placement is clamped when the game area shrinks", function()
     local Mock = require("tests/mock")
     local app = Mock.install()
     local Settings = require("xbb/settings")
@@ -1338,15 +1886,10 @@ test("settings dragging converts scale and origin and clamps resized odd viewpor
     parent.xyGlobal = { x = 50, y = 30 }
     game.options.InterfaceScale.setting = 150
     local settings = Settings.new(app.db, error)
+    settings:setWindowPosition(9999, 9999)
     local view = View.new(parent, settings)
-    for _, target in ipairs({ { 180, 210 }, { -200, -200 }, { 9999, 9999 } }) do
-        local title = pressSettings(app, view)
-        settingsPointer(app, view, target[1], target[2])
-        view:refresh()
-        dropSettings(title)
-        equal(view.root.x, math.max(0, math.min(241, target[1])))
-        equal(view.root.y, math.max(0, math.min(241, target[2])))
-    end
+    equal(view.root.x, 241)
+    equal(view.root.y, 241)
     local writes = app.db.writes
     parent:SetSize(777, 577)
     view:refresh()
@@ -1355,11 +1898,11 @@ test("settings dragging converts scale and origin and clamps resized odd viewpor
     equal(view.root.width, 757)
     equal(view.root.height, 557)
     equal(app.db.writes, writes)
-    equal(settings.data.settingsWindowPosition.x, 241)
+    equal(settings.data.settingsWindowPosition.x, 9999)
     view:destroy()
 end)
 
-test("settings refresh waits for title drag and preserves placement tab and page", function()
+test("settings refresh preserves the PrettyUI frame tab pagination and scroll", function()
     local Mock = require("tests/mock")
     local app = Mock.install()
     local Settings = require("xbb/settings")
@@ -1368,26 +1911,25 @@ test("settings refresh waits for title drag and preserves placement tab and page
     local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
     view.tab, view.page = "Missing", 2
     view:render()
-    local root, title = view.root, pressSettings(app, view)
-    settingsPointer(app, view, 180, 210)
+    local root = view.root
+    root:SetPos(180, 210)
+    view.group:GetPage(4):SetScrollPosition(20)
     settings:remember({ { key = "buff:test", name = "Test", kind = "buff" } })
     view:refresh()
-    view:render()
     equal(view.root, root)
     equal(root.destroyed, nil)
-    dropSettings(title)
-    equal(root.destroyed, true)
     equal(view.tab, "Missing")
     equal(view.page, 2)
     equal(view.root.x, 180)
     equal(view.root.y, 210)
+    equal(view.group:GetPage(4).scrollY, 20)
     local refreshed = view.root
     view:refresh()
     equal(view.root, refreshed)
     view:destroy()
 end)
 
-test("settings drag failures restore saved or centred placement and report", function()
+test("rejected PrettyUI placement writes restore saved or centred placement and report", function()
     local Mock = require("tests/mock")
     local Settings = require("xbb/settings")
     local View = require("xbb/settings_ui")
@@ -1397,11 +1939,10 @@ test("settings drag failures restore saved or centred placement and report", fun
         local settings = Settings.new(app.db, warn)
         local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
         local x, y, stored = view.root.x, view.root.y, app.db.values.settings
-        local title = pressSettings(app, view)
-        settingsPointer(app, view, 180, 210)
+        view.root:SetPos(180, 210)
         view:refresh()
         app.db.Set = function() return false end
-        dropSettings(title)
+        view.window:Close()
         equal(view.root.x, x)
         equal(view.root.y, y)
         equal(app.db.values.settings, stored)
@@ -1410,85 +1951,78 @@ test("settings drag failures restore saved or centred placement and report", fun
     end
 end)
 
-test("settings close resize and input loss finish dragging without duplicate saves", function()
+test("settings close focus loss and teardown avoid duplicate position saves", function()
     local Mock = require("tests/mock")
     local Settings = require("xbb/settings")
     local View = require("xbb/settings_ui")
-    for _, finish in ipairs({ "close", "resize", "input" }) do
+    for _, finish in ipairs({ "close", "focus", "destroy" }) do
         local app = Mock.install()
         local settings = Settings.new(app.db, error)
         local parent = app.components.TOPLEVEL_V2__GAME_AREA
         local view = View.new(parent, settings)
-        local title = pressSettings(app, view)
-        settingsPointer(app, view, 180, 210)
+        view.root:SetPos(180, 210)
         view:refresh()
-        if finish == "close" then Mock.find(view.root, "Close").hooks[ui.Hook.ONBUTTONPRESSED]()
-        elseif finish == "resize" then parent:SetSize(777, 577)
-        else app.input.available = false end
+        if finish == "close" then view.window:Close()
+        elseif finish == "focus" then view:finishDrag()
+        else view:destroy() end
         view:refresh()
-        equal(view.drag, nil)
         equal(app.db.writes, 1)
-        if finish == "close" then equal(view.root, nil)
-        else
-            assert(view.root.x >= 0 and view.root.x + view.root.width <= parent.width)
-            assert(view.root.y >= 0 and view.root.y + view.root.height <= parent.height)
-        end
-        dropSettings(title)
         view:destroy()
         equal(app.db.writes, 1)
     end
 end)
 
-test("entrypoint retains settings placement across focus openers reload and shutdown", function()
+test("native launchers retain floating settings across remounts focus reload and logout", function()
     local Mock = require("tests/mock")
     local app = Mock.install()
     local parent = app.components.TOPLEVEL_V2__GAME_AREA
     dofile("main.lua")
     PluginLogic({ logicTick = 0 })
-    Mock.find(parent, "Settings").hooks[ui.Hook.ONBUTTONPRESSED]()
-    local function opened(host)
-        local root = assert(Mock.find(host, "Close")).parent
-        return { parent = host, root = root,
-            title = assert(Mock.find(root, "XBB / Xijie Buff Bars / Display")) }
+    local host = Mock.node()
+    app.events.ContentLayerReady.xbb({ component = host })
+    Mock.click(host, "Open full settings")
+    local function opened()
+        for _, child in ipairs(parent.children) do
+            if Mock.find(child, "XBB / Xijie Buff Bars") then return child end
+        end
+        error("floating settings window missing")
     end
-    local view = opened(parent)
-    local title = pressSettings(app, view)
-    settingsPointer(app, view, 180, 210)
+    local root = opened()
+    root:SetPos(180, 210)
     PluginLogic({ logicTick = 1 })
     app.events.WindowFocusChanged.xbb({ hasFocus = false })
     equal(app.db.values.settings.settingsWindowPosition.x, 180)
-    equal(view.root.destroyed, true)
-    local host = Mock.node()
-    host.xyGlobal = { x = 40, y = 30 }
-    app.events.SettingsLayerReady.xbb({ component = host })
-    view = opened(host)
-    equal(view.root.x, 180)
-    equal(view.root.y, 210)
-    title = pressSettings(app, view)
-    settingsPointer(app, view, 80, 90)
+    equal(root.destroyed, nil)
+    local settingsHost = Mock.node()
+    app.events.SettingsLayerReady.xbb({ component = settingsHost })
+    Mock.click(settingsHost, "Open full settings")
+    equal(opened(), root)
+    local replacement = Mock.node()
+    app.events.ContentLayerReady.xbb({ component = replacement })
+    equal(Mock.find(host, "Open full settings"), nil)
+    equal(host.destroyed, nil)
+    equal(opened(), root)
+    root:SetPos(80, 90)
     PluginLogic({ logicTick = 2 })
     PluginShutdown()
-    equal(view.root.destroyed, true)
+    equal(root.destroyed, true)
     equal(app.db.values.settings.settingsWindowPosition.y, 90)
     local writes = app.db.writes
-    title.hooks[ui.Hook.ONRELEASE](title, 20, 14)
-    equal(app.db.writes, writes)
     dofile("main.lua")
     PluginLogic({ logicTick = 0 })
-    Mock.find(parent, "Settings").hooks[ui.Hook.ONBUTTONPRESSED]()
-    view = opened(parent)
-    equal(view.root.x, 80)
-    equal(view.root.y, 90)
-    title = pressSettings(app, view)
-    settingsPointer(app, view, 100, 110)
+    app.events.ContentLayerReady.xbb({ component = replacement })
+    Mock.click(replacement, "Open full settings")
+    root = opened()
+    equal(root.x, 80)
+    equal(root.y, 90)
+    equal(app.db.writes, writes)
+    root:SetPos(100, 110)
     PluginLogic({ logicTick = 1 })
     app.availability(false)
     PluginLogic({ logicTick = 2 })
-    equal(view.root.destroyed, true)
+    equal(root.destroyed, true)
     equal(app.db.values.settings.settingsWindowPosition.x, 100)
-    local savedWrites = app.db.writes
-    dropSettings(title)
-    equal(app.db.writes, savedWrites)
+    equal(Mock.find(replacement, "Open full settings").enabled, false)
     PluginShutdown()
 end)
 
@@ -1505,9 +2039,9 @@ test("Display exposes drag lock and reset instead of coordinate buttons", functi
     assert(Mock.find(view.root, "Turn on the items you want XBB to track."))
     assert(not Mock.find(view.root, "Horizontal position: 9999"))
     assert(not Mock.find(view.root, "Vertical position: 9999"))
-    Mock.find(view.root, "Lock dragging: off").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Lock bar dragging")
     equal(settings.data.dragLocked, true)
-    Mock.find(view.root, "Reset positions").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Reset positions")
     equal(settings.data.x, 32)
     equal(settings.data.y, 80)
     equal(settings.data.debuffX, 396)
@@ -1532,25 +2066,25 @@ test("Observed actions can undo pins hiding and custom watches without leaving t
     local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
     view.tab = "Observed"
     view:render()
-    Mock.find(view.root, "Pin").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Pin")
     equal(settings:findPin(target.key).slot, 1)
     equal(settings:findPin("buff:other").slot, 2)
     equal(settings:findPin("debuff:1").slot, 1)
     settings:pin(target, 4, true)
-    Mock.find(view.root, "Unpin").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Unpin")
     equal(settings:findPin(target.key), nil)
     equal(settings:findPin("buff:other").slot, 2)
-    Mock.find(view.root, "Hide").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Hide")
     assert(settings.data.hidden[target.key])
-    Mock.find(view.root, "Unhide").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Unhide")
     equal(settings.data.hidden[target.key], nil)
-    Mock.find(view.root, "Warn when missing").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Warn when missing")
     equal(settings.data.rules[target.key].enabled, true)
-    Mock.find(view.root, "Remove warning").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Remove warning")
     equal(settings.data.rules[target.key], nil)
     settings:watch({ id = target.key, name = target.name, keys = { target.key }, enabled = false })
     view:render()
-    Mock.find(view.root, "Remove warning").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Remove warning")
     equal(settings.data.rules[target.key], nil)
     equal(view.tab, "Observed")
     local loaded = Settings.new(app.db, error)
@@ -1580,9 +2114,12 @@ test("Observed uses short names and identifies buffs and non-watchable debuffs",
     assert(Mock.find(view.root, "Debuff"))
     equal(Mock.find(view.root, original), nil)
     local watchButtons = 0
-    for _, node in ipairs(view.root.children) do
+    local function countButtons(node)
+        if node.destroyed then return end
         if node.label == "Warn when missing" then watchButtons = watchButtons + 1 end
+        for _, child in ipairs(node.children) do countButtons(child) end
     end
+    countButtons(view.root)
     equal(watchButtons, 1)
     view:destroy()
 end)
@@ -1598,12 +2135,12 @@ test("Missing deletes manually added rules while presets remain toggles", functi
     local view = View.new(app.components.TOPLEVEL_V2__GAME_AREA, settings)
     view.tab, view.page = "Missing", 99
     view:render()
-    Mock.find(view.root, "Delete").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Delete")
     equal(settings.data.rules["buff:legacy"], nil)
     equal(settings.data.rules.overload.enabled, true)
     view.page = 1
     view:render()
-    Mock.find(view.root, "Enabled").hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(view.root, "Enabled")
     equal(settings.data.rules.overload.enabled, false)
     equal(settings.data.rules.overload.preset, "overload")
     equal(Mock.find(view.root, "Delete"), nil)
@@ -1938,15 +2475,16 @@ test("draw updates discover new visuals and suppress animation resets without me
     assert(Mock.find(app.components.TOPLEVEL_V2__GAME_AREA, "29s"))
     equal(scans, 2)
     local gameArea = app.components.TOPLEVEL_V2__GAME_AREA
-    assert(Mock.find(gameArea, "Settings")).hooks[ui.Hook.ONBUTTONPRESSED]()
-    assert(Mock.find(gameArea, "Replace original bars: on")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    local host = Mock.node()
+    app.events.ContentLayerReady.xbb({ component = host })
+    Mock.click(host, "Replace original bars")
     app.events.Draw.xbb({ timeDeltaSecs = 1 / 144 })
     equal(source.alpha, 255)
     equal(timer.alpha, 173)
     equal(addedIcon.alpha, 255)
     equal(addedTimer.alpha, 61)
     equal(staticIcon.alpha, 255)
-    assert(Mock.find(gameArea, "Replace original bars: off")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(host, "Replace original bars")
     app.events.Draw.xbb({ timeDeltaSecs = 1 / 144 })
     equal(icon.alpha, 0)
     app.availability(false)
@@ -2073,9 +2611,11 @@ test("entrypoint supports native menus settings replacement and logout cleanup",
         for _, item in ipairs(menu.entries) do if item.label == name then item.run(); return end end
         error("missing menu action " .. name)
     end
-    assert(Mock.find(gameArea, "Settings")).hooks[ui.Hook.ONBUTTONPRESSED]()
-    assert(Mock.find(gameArea, "Missing")).hooks[ui.Hook.ONBUTTONPRESSED]()
-    for _ = 1, 2 do assert(Mock.find(gameArea, "Next")).hooks[ui.Hook.ONBUTTONPRESSED]() end
+    local host = Mock.node()
+    app.events.ContentLayerReady.xbb({ component = host })
+    Mock.click(host, "Open full settings")
+    Mock.click(gameArea, "Missing")
+    for _ = 1, 3 do Mock.click(gameArea, "Next") end
     local tick = 5
     local function refresh()
         tick = tick + 5
@@ -2085,14 +2625,13 @@ test("entrypoint supports native menus settings replacement and logout cleanup",
     action("Warn when missing")
     refresh()
     assert(Mock.find(gameArea, "Delete"))
-    assert(Mock.find(gameArea, "3 / 3"))
-    assert(Mock.find(gameArea, "XBB / Xijie Buff Bars / Missing"))
+    assert(Mock.find(gameArea, "XBB / Xijie Buff Bars"))
     assert(app.db.values.settings.rules["buff:name:soul split"].enabled)
-    assert(Mock.find(gameArea, "Pins")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Pins")
     action("Pin to slot 1")
     refresh()
     assert(Mock.find(gameArea, "Unpin"))
-    assert(Mock.find(gameArea, "XBB / Xijie Buff Bars / Pins"))
+    assert(Mock.find(gameArea, "XBB / Xijie Buff Bars"))
     equal(app.db.values.settings.pins[1].slot, 1)
     menu.entries = {}
     app.events.MiniMenuReady.xbb({ miniMenu = menu })
@@ -2100,31 +2639,31 @@ test("entrypoint supports native menus settings replacement and logout cleanup",
     refresh()
     equal(Mock.find(gameArea, "Unpin"), nil)
     assert(Mock.find(gameArea, "No items yet."))
-    assert(Mock.find(gameArea, "Hidden")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Hidden")
     action("Hide in XBB")
     refresh()
     assert(Mock.find(gameArea, "Restore"))
     assert(app.db.values.settings.hidden["buff:name:soul split"])
-    assert(Mock.find(gameArea, "Restore")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Restore")
     equal(next(app.db.values.settings.hidden), nil)
-    assert(Mock.find(gameArea, "Display")).hooks[ui.Hook.ONBUTTONPRESSED]()
-    assert(Mock.find(gameArea, "Stacks: combined")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Display")
+    Mock.click(gameArea, "Separate buff/debuff stacks")
     equal(app.db.values.settings.separate, true)
     refresh()
-    assert(Mock.find(gameArea, "Replace original bars: on")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Replace original bars")
     refresh()
     equal(soulSplit.alpha, 255)
     equal(soulSplit.children[1].alpha, 255)
-    assert(Mock.find(gameArea, "Replace original bars: off")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Replace original bars")
     refresh()
     equal(soulSplit.alpha, 0)
     equal(soulSplit.children[1].alpha, 0)
-    local settingsRoot = assert(Mock.find(gameArea, "XBB / Xijie Buff Bars / Display")).parent
+    local settingsRoot = assert(Mock.find(gameArea, "XBB / Xijie Buff Bars")).parent
     refresh()
     equal(settingsRoot.destroyed, nil)
-    assert(Mock.find(gameArea, "Close")).hooks[ui.Hook.ONBUTTONPRESSED]()
+    Mock.click(gameArea, "Close")
     refresh()
-    equal(Mock.find(gameArea, "XBB / Xijie Buff Bars / Display"), nil)
+    assert(settingsRoot.parent.hidden)
     soulSplit.opConfig.opBaseName = ""
     app.events.ServerLogic.xbb()
     refresh()
@@ -2145,6 +2684,7 @@ test("entrypoint supports native menus settings replacement and logout cleanup",
     equal(next(app.events.ServerLogic), nil)
     equal(next(app.events.MiniMenuReady), nil)
     equal(next(app.events.SettingsLayerReady), nil)
+    equal(next(app.events.ContentLayerReady), nil)
     equal(#app.warnings, 1)
 end)
 
